@@ -1,0 +1,39 @@
+plugins {
+    id 'com.android.library' version '8.2.2' apply true
+}
+
+android {
+    namespace 'plugin.ironSource'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 21
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://android-sdk.is.com/' }
+}
+
+dependencies {
+    // IronSource (Unity LevelPlay) SDK 9.2.0
+    implementation 'com.ironsource.sdk:mediationsdk:9.2.0'
+    // Kotlin stdlib required by IronSource 9.x
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.0'
+
+    // Corona SDK — compileOnly; provided by Solar2D at runtime
+    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
+}
