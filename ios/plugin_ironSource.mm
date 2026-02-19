@@ -1,36 +1,37 @@
 // plugin_ironSource.mm
 // Solar2D iOS plugin bridge for IronSource (Unity LevelPlay) SDK 9.x
 // ----------------------------------------------------------------------------
-// SDK 9.x uses object-based LPMInterstitialAd / LPMRewardedAd APIs.
-// The old static IronSource APIs (loadInterstitial, hasInterstitial,
-// showInterstitialWithViewController:placement:, hasRewardedVideo,
-// showRewardedVideoWithViewController:placement:, setLevelPlayInterstitialDelegate:,
-// setLevelPlayRewardedVideoDelegate:, setConsent:) were removed in SDK 9.0.
+// Rewritten for SDK 9.x object-based API (LPMInterstitialAd / LPMRewardedAd).
+// All old static APIs removed in SDK 9.0 have been replaced.
 //
-// Init flow:
-//   LPMInitRequest → [LevelPlay initWithRequest:completion:]
-// Interstitial:
-//   LPMInterstitialAd (LPMInterstitialAdDelegate) — loadAd / showAdWithViewController:placementName:
-// Rewarded:
-//   LPMRewardedAd (LPMRewardedAdDelegate) — loadAd / showAdWithViewController:placementName:
-// Consent:
-//   [LevelPlay setConsent:BOOL]  (NOT [IronSource setConsent:])
+// SDK 9.x changes:
+//   - Init:      [LevelPlay initWithRequest:completion:]  (LPMInitRequest)
+//   - Consent:   [LevelPlay setConsent:]  (NOT [IronSource setConsent:])
+//   - Interstitial: LPMInterstitialAd object + LPMInterstitialAdDelegate
+//   - Rewarded:  LPMRewardedAd object + LPMRewardedAdDelegate
 //
-// CoronaLuaRef is void* — NULL sentinel (not LUA_NOREF)
-// Lua 5.1: lua_pushcfunction/lua_setfield (not luaL_setfuncs)
+// Lua API (unchanged from 7.x):
+//   ironSource.init(listener, options)          -- options: key, userId, interstitialAdUnitId,
+//                                               --   rewardedVideoAdUnitId, hasUserConsent,
+//                                               --   coppaUnderAge, ccpaDoNotSell, showDebugLog
+//   ironSource.load(adType)                     -- "interstitial" | "rewardedVideo"
+//   ironSource.show(adType [, options])         -- options: placementName
+//   ironSource.isAvailable(adType) → boolean
+//
+// Events: { name="ironSource", type, phase, isError [, response] }
 // ----------------------------------------------------------------------------
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <IronSource/IronSource.h>
+#import <IronSource/IronSource.h>   // includes LPM* headers in SDK 9.x
 
 #import "CoronaRuntime.h"
 #import "CoronaLua.h"
 #import "CoronaLibrary.h"
 
-// ----------------------------------------------------------------------------
-// Shared state (plugin singleton)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Shared globals (plugin singleton)
+// ---------------------------------------------------------------------------
 
 static lua_State    *sL           = NULL;
 static CoronaLuaRef  sListenerRef = NULL;   // void* — NULL = no listener
@@ -38,37 +39,40 @@ static CoronaLuaRef  sListenerRef = NULL;   // void* — NULL = no listener
 static LPMInterstitialAd *sInterstitialAd = nil;
 static LPMRewardedAd     *sRewardedAd     = nil;
 
-// Forward-declare delegate objects (defined below)
-@class ISPluginInterstitialDelegate;
-@class ISPluginRewardedDelegate;
-
-static ISPluginInterstitialDelegate *sInterstitialDelegate = nil;
-static ISPluginRewardedDelegate     *sRewardedDelegate     = nil;
-
-// ----------------------------------------------------------------------------
-// Event dispatcher — always dispatches on main thread
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Event dispatch helper
+// ---------------------------------------------------------------------------
 
 static void DispatchEvent(const char *type, const char *phase, BOOL isError, NSString *response) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!sL || !sListenerRef) return;
         CoronaLuaNewEvent(sL, "ironSource");
-        lua_pushstring(sL, type);              lua_setfield(sL, -2, "type");
-        lua_pushstring(sL, phase);             lua_setfield(sL, -2, "phase");
-        lua_pushboolean(sL, isError ? 1 : 0); lua_setfield(sL, -2, "isError");
-        if (response) {
-            lua_pushstring(sL, [response UTF8String]);
-            lua_setfield(sL, -2, "response");
-        }
+        lua_pushstring(sL, type);               lua_setfield(sL, -2, "type");
+        lua_pushstring(sL, phase);              lua_setfield(sL, -2, "phase");
+        lua_pushboolean(sL, isError ? 1 : 0);  lua_setfield(sL, -2, "isError");
+        if (response) { lua_pushstring(sL, [response UTF8String]); lua_setfield(sL, -2, "response"); }
         CoronaLuaDispatchEvent(sL, sListenerRef, 0);
     });
 }
 
-// ----------------------------------------------------------------------------
-// Interstitial delegate  (LPMInterstitialAdDelegate)
-// Required: didLoadAdWithAdInfo:, didFailToLoadAdWithAdUnitId:error:, didDisplayAdWithAdInfo:
-// Optional: didFailToDisplayAdWithAdInfo:error:, didClickAdWithAdInfo:, didCloseAdWithAdInfo:
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Helper: get the topmost presented view controller
+// ---------------------------------------------------------------------------
+
+static UIViewController *TopViewController(void) {
+    UIWindow *window = nil;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (w.isKeyWindow) { window = w; break; }
+    }
+    if (!window) window = [UIApplication sharedApplication].windows.firstObject;
+    UIViewController *vc = window.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
+}
+
+// ---------------------------------------------------------------------------
+// Interstitial delegate (LPMInterstitialAdDelegate — SDK 9.x)
+// ---------------------------------------------------------------------------
 
 @interface ISPluginInterstitialDelegate : NSObject <LPMInterstitialAdDelegate>
 @end
@@ -93,20 +97,23 @@ static void DispatchEvent(const char *type, const char *phase, BOOL isError, NSS
     DispatchEvent("interstitial", "show", YES, msg);
 }
 
-- (void)didClickAdWithAdInfo:(LPMAdInfo *)adInfo {}
+- (void)didClickAdWithAdInfo:(LPMAdInfo *)adInfo {
+    // no-op — click events not forwarded to Lua
+}
 
 - (void)didCloseAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("interstitial", "closed", NO, nil);
+    // Auto-preload next interstitial (mirrors Android behavior)
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (sInterstitialAd) [sInterstitialAd loadAd];
+    });
 }
 
 @end
 
-// ----------------------------------------------------------------------------
-// Rewarded delegate  (LPMRewardedAdDelegate)
-// Required: didLoadAdWithAdInfo:, didFailToLoadAdWithAdUnitId:error:,
-//           didDisplayAdWithAdInfo:, didRewardAdWithAdInfo:reward:
-// Optional: didFailToDisplayAdWithAdInfo:error:, didClickAdWithAdInfo:, didCloseAdWithAdInfo:
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Rewarded delegate (LPMRewardedAdDelegate — SDK 9.x)
+// ---------------------------------------------------------------------------
 
 @interface ISPluginRewardedDelegate : NSObject <LPMRewardedAdDelegate>
 @end
@@ -126,54 +133,61 @@ static void DispatchEvent(const char *type, const char *phase, BOOL isError, NSS
     DispatchEvent("rewardedVideo", "show", NO, nil);
 }
 
-- (void)didRewardAdWithAdInfo:(LPMAdInfo *)adInfo reward:(LPMReward *)reward {
-    // Pass reward name (or placement name from adInfo if available) as response
-    NSString *rewardName = (reward && reward.name.length) ? reward.name
-                         : (adInfo.placementName.length   ? adInfo.placementName : nil);
-    DispatchEvent("rewardedVideo", "reward", NO, rewardName);
-}
-
 - (void)didFailToDisplayAdWithAdInfo:(LPMAdInfo *)adInfo error:(NSError *)error {
     NSString *msg = error ? [error localizedDescription] : @"show failed";
     DispatchEvent("rewardedVideo", "show", YES, msg);
 }
 
-- (void)didClickAdWithAdInfo:(LPMAdInfo *)adInfo {}
+- (void)didClickAdWithAdInfo:(LPMAdInfo *)adInfo {
+    // no-op
+}
 
 - (void)didCloseAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("rewardedVideo", "closed", NO, nil);
+    // Auto-reload for next show (mirrors Android behavior)
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (sRewardedAd) [sRewardedAd loadAd];
+    });
 }
+
+- (void)didRewardAdWithAdInfo:(LPMAdInfo *)adInfo reward:(LPMReward *)reward {
+    NSString *rewardName = (reward && reward.name.length) ? reward.name
+                         : (adInfo.placementName.length   ? adInfo.placementName : nil);
+    DispatchEvent("rewardedVideo", "reward", NO, rewardName);
+}
+
+// Optional: fires when a higher-CPM ad replaces the loaded one
+- (void)didChangeAdInfo:(LPMAdInfo *)adInfo {}
 
 @end
 
-// ----------------------------------------------------------------------------
-// Lua API implementation
-// ----------------------------------------------------------------------------
+// Delegate singletons
+static ISPluginInterstitialDelegate *sInterstitialDelegate = nil;
+static ISPluginRewardedDelegate     *sRewardedDelegate     = nil;
 
-// ironSource.init(listener, options)
-// options: { key, userId, hasUserConsent, coppaUnderAge, ccpaDoNotSell,
-//            showDebugLog, interstitialAdUnitId, rewardedVideoAdUnitId }
+// ---------------------------------------------------------------------------
+// Lua: init(listener, options)
+// ---------------------------------------------------------------------------
+
 static int lua_init(lua_State *L) {
     if (!CoronaLuaIsListener(L, 1, "ironSource")) {
-        luaL_error(L, "ironSource.init: arg 1 must be a listener");
-        return 0;
+        luaL_error(L, "ironSource.init: arg 1 must be a listener"); return 0;
     }
     sL = L;
     if (sListenerRef) { CoronaLuaDeleteRef(L, sListenerRef); }
     sListenerRef = CoronaLuaNewRef(L, 1);
 
     if (lua_gettop(L) < 2 || !lua_istable(L, 2)) {
-        luaL_error(L, "ironSource.init: arg 2 must be an options table");
-        return 0;
+        luaL_error(L, "ironSource.init: arg 2 must be options table"); return 0;
     }
 
-#define GSTR(f)  ({ lua_getfield(L,2,(f)); NSString *_v = lua_isstring(L,-1) ? @(lua_tostring(L,-1)) : nil; lua_pop(L,1); _v; })
-#define GBOOL(f) ({ lua_getfield(L,2,(f)); BOOL _v = lua_isboolean(L,-1) && (BOOL)lua_toboolean(L,-1); lua_pop(L,1); _v; })
+#define GSTR(f) ({ lua_getfield(L,2,f); NSString *_v=lua_isstring(L,-1)?@(lua_tostring(L,-1)):nil; lua_pop(L,1); _v; })
+#define GBOOL(f) ({ lua_getfield(L,2,f); BOOL _v=lua_isboolean(L,-1)&&(BOOL)lua_toboolean(L,-1); lua_pop(L,1); _v; })
 
     NSString *appKey              = GSTR("key");
     NSString *userId              = GSTR("userId");
-    NSString *interstitialAdUnit  = GSTR("interstitialAdUnitId");
-    NSString *rewardedAdUnit      = GSTR("rewardedVideoAdUnitId");
+    NSString *interstitialAdUnitId = GSTR("interstitialAdUnitId");
+    NSString *rewardedAdUnitId    = GSTR("rewardedVideoAdUnitId");
     BOOL hasConsent               = GBOOL("hasUserConsent");
     BOOL coppa                    = GBOOL("coppaUnderAge");
     BOOL ccpa                     = GBOOL("ccpaDoNotSell");
@@ -182,93 +196,92 @@ static int lua_init(lua_State *L) {
 #undef GSTR
 #undef GBOOL
 
-    if (!appKey.length) {
-        luaL_error(L, "ironSource.init: options.key is required");
-        return 0;
-    }
+    if (!appKey.length) { luaL_error(L, "ironSource.init: options.key required"); return 0; }
 
-    // Capture all values for async block
-    NSString *appKeyC           = [appKey copy];
-    NSString *userIdC           = [userId copy];
-    NSString *interstitialIdC   = [interstitialAdUnit copy];
-    NSString *rewardedIdC       = [rewardedAdUnit copy];
+    // Capture for async block
+    NSString *appKeyC              = [appKey copy];
+    NSString *userIdC              = [userId copy];
+    NSString *intAdUnitIdC         = [interstitialAdUnitId copy];
+    NSString *rvAdUnitIdC          = [rewardedAdUnitId copy];
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        // Consent and privacy (must be called before init)
-        [LevelPlay setConsent:hasConsent];
-        [LevelPlay setMetaDataWithKey:@"is_coppa"    value:coppa ? @"true" : @"false"];
-        [LevelPlay setMetaDataWithKey:@"do_not_sell" value:ccpa  ? @"true" : @"false"];
 
-        if (debug) {
-            [LevelPlay setAdaptersDebug:YES];
+        // ---- Privacy / consent (must be set BEFORE init in SDK 9.x) ----
+        [LevelPlay setConsent:hasConsent];                                  // SDK 9.x consent API
+        [IronSource setMetaDataWithKey:@"is_coppa"    value:coppa ? @"true" : @"false"];
+        [IronSource setMetaDataWithKey:@"do_not_sell" value:ccpa  ? @"true" : @"false"];
+        if (debug) [IronSource setAdaptersDebug:YES];
+
+        // ---- Build LPMInitRequest ----
+        LPMInitRequestBuilder *builder =
+            [[LPMInitRequestBuilder alloc] initWithAppKey:appKeyC];
+        if (userIdC.length) {
+            [builder withUserId:userIdC];
         }
+        LPMInitRequest *initRequest = [builder build];
 
-        // Create delegate objects
-        sInterstitialDelegate = [[ISPluginInterstitialDelegate alloc] init];
-        sRewardedDelegate     = [[ISPluginRewardedDelegate alloc] init];
-
-        // Create ad objects (requires ad unit IDs from LevelPlay dashboard)
-        if (interstitialIdC.length) {
-            sInterstitialAd = [[LPMInterstitialAd alloc] initWithAdUnitId:interstitialIdC];
-            [sInterstitialAd setDelegate:sInterstitialDelegate];
-        }
-        if (rewardedIdC.length) {
-            sRewardedAd = [[LPMRewardedAd alloc] initWithAdUnitId:rewardedIdC];
-            [sRewardedAd setDelegate:sRewardedDelegate];
-        }
-
-        // Build init request
-        LPMInitRequest *initRequest = [[LPMInitRequest alloc]
-                                       initWithAppKey:appKeyC
-                                       userId:(userIdC.length ? userIdC : nil)];
-
-        // Initialize SDK
-        [LevelPlay initWithRequest:initRequest
-                        completion:^(LPMConfiguration * _Nullable config, NSError * _Nullable error) {
+        // ---- Initialize LevelPlay SDK ----
+        [LevelPlay initWithRequest:initRequest completion:^(LPMConfiguration * _Nullable config,
+                                                            NSError * _Nullable error) {
             if (error) {
-                DispatchEvent("init", "failed", YES, [error localizedDescription]);
-            } else {
-                DispatchEvent("init", "success", NO, nil);
+                NSString *msg = [NSString stringWithFormat:@"%@ (%ld)",
+                                 error.localizedDescription, (long)error.code];
+                NSLog(@"[IronSourcePlugin] LevelPlay init failed: %@", msg);
+                DispatchEvent("init", "failed", YES, msg);
+                return;
+            }
+
+            NSLog(@"[IronSourcePlugin] LevelPlay SDK initialized successfully");
+            DispatchEvent("init", "success", NO, nil);
+
+            // ---- Create and load Interstitial ----
+            if (intAdUnitIdC.length) {
+                if (!sInterstitialDelegate) sInterstitialDelegate = [[ISPluginInterstitialDelegate alloc] init];
+                sInterstitialAd = [[LPMInterstitialAd alloc] initWithAdUnitId:intAdUnitIdC];
+                sInterstitialAd.delegate = sInterstitialDelegate;
+                [sInterstitialAd loadAd];
+            }
+
+            // ---- Create and load Rewarded ----
+            if (rvAdUnitIdC.length) {
+                if (!sRewardedDelegate) sRewardedDelegate = [[ISPluginRewardedDelegate alloc] init];
+                sRewardedAd = [[LPMRewardedAd alloc] initWithAdUnitId:rvAdUnitIdC];
+                sRewardedAd.delegate = sRewardedDelegate;
+                [sRewardedAd loadAd];
             }
         }];
     });
+
     return 0;
 }
 
-// ironSource.load(adType)   adType = "interstitial" | "rewardedVideo"
+// ---------------------------------------------------------------------------
+// Lua: load(adType)
+// ---------------------------------------------------------------------------
+
 static int lua_load(lua_State *L) {
-    if (!lua_isstring(L, 1)) {
-        luaL_error(L, "ironSource.load: arg 1 must be adType string");
-        return 0;
-    }
+    if (!lua_isstring(L, 1)) { luaL_error(L, "ironSource.load: arg 1 must be string"); return 0; }
     NSString *adType = @(lua_tostring(L, 1));
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if ([adType isEqualToString:@"interstitial"]) {
-            if (sInterstitialAd) {
-                [sInterstitialAd loadAd];
-            } else {
-                DispatchEvent("interstitial", "show", YES, @"interstitialAdUnitId not set");
-            }
+            if (sInterstitialAd) [sInterstitialAd loadAd];
+            else NSLog(@"[IronSourcePlugin] ironSource.load(interstitial) – ad object not ready");
         } else if ([adType isEqualToString:@"rewardedVideo"]) {
-            if (sRewardedAd) {
-                [sRewardedAd loadAd];
-            } else {
-                DispatchEvent("rewardedVideo", "show", YES, @"rewardedVideoAdUnitId not set");
-            }
+            if (sRewardedAd) [sRewardedAd loadAd];
+            else NSLog(@"[IronSourcePlugin] ironSource.load(rewardedVideo) – ad object not ready");
         }
     });
     return 0;
 }
 
-// ironSource.show(adType [, options])   options: { placementName }
-static int lua_show(lua_State *L) {
-    if (!lua_isstring(L, 1)) {
-        luaL_error(L, "ironSource.show: arg 1 must be adType string");
-        return 0;
-    }
-    NSString *adType = @(lua_tostring(L, 1));
+// ---------------------------------------------------------------------------
+// Lua: show(adType [, options])
+// ---------------------------------------------------------------------------
 
+static int lua_show(lua_State *L) {
+    if (!lua_isstring(L, 1)) { luaL_error(L, "ironSource.show: arg 1 must be string"); return 0; }
+    NSString *adType = @(lua_tostring(L, 1));
     NSString *placement = nil;
     if (lua_gettop(L) >= 2 && lua_istable(L, 2)) {
         lua_getfield(L, 2, "placementName");
@@ -278,19 +291,20 @@ static int lua_show(lua_State *L) {
     NSString *fp = [placement copy];
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *vc = [UIApplication sharedApplication].keyWindow.rootViewController;
+        UIViewController *vc = TopViewController();
 
         if ([adType isEqualToString:@"interstitial"]) {
             if (sInterstitialAd && [sInterstitialAd isAdReady]) {
-                [sInterstitialAd showAdWithViewController:vc
-                                           placementName:(fp.length ? fp : nil)];
+                if (fp.length) [sInterstitialAd showAdWithViewController:vc placementName:fp];
+                else           [sInterstitialAd showAdWithViewController:vc];
             } else {
                 DispatchEvent("interstitial", "show", YES, @"not ready");
             }
+
         } else if ([adType isEqualToString:@"rewardedVideo"]) {
             if (sRewardedAd && [sRewardedAd isAdReady]) {
-                [sRewardedAd showAdWithViewController:vc
-                                       placementName:(fp.length ? fp : nil)];
+                if (fp.length) [sRewardedAd showAdWithViewController:vc placementName:fp];
+                else           [sRewardedAd showAdWithViewController:vc];
             } else {
                 DispatchEvent("rewardedVideo", "show", YES, @"not available");
             }
@@ -299,28 +313,30 @@ static int lua_show(lua_State *L) {
     return 0;
 }
 
-// ironSource.isAvailable(adType)  → boolean
-// Corona/Solar2D calls Lua from the main thread, so direct access is safe.
+// ---------------------------------------------------------------------------
+// Lua: isAvailable(adType) → boolean
+// ---------------------------------------------------------------------------
+
 static int lua_isAvailable(lua_State *L) {
     if (!lua_isstring(L, 1)) { lua_pushboolean(L, 0); return 1; }
     NSString *adType = @(lua_tostring(L, 1));
-    BOOL v = NO;
-    if ([adType isEqualToString:@"interstitial"])  v = sInterstitialAd ? [sInterstitialAd isAdReady] : NO;
-    if ([adType isEqualToString:@"rewardedVideo"]) v = sRewardedAd     ? [sRewardedAd     isAdReady] : NO;
-    lua_pushboolean(L, v ? 1 : 0);
+    BOOL available = NO;
+    if ([adType isEqualToString:@"interstitial"])  available = (sInterstitialAd && [sInterstitialAd isAdReady]);
+    if ([adType isEqualToString:@"rewardedVideo"]) available = (sRewardedAd     && [sRewardedAd     isAdReady]);
+    lua_pushboolean(L, available ? 1 : 0);
     return 1;
 }
 
-// ----------------------------------------------------------------------------
-// Entry point — called when Lua does require("plugin.ironSource")
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Plugin entry point
+// ---------------------------------------------------------------------------
 
 CORONA_EXPORT
 int luaopen_plugin_ironSource(lua_State *L) {
     sL           = L;
-    sListenerRef = NULL;  // CoronaLuaRef = void* — NULL means no listener
+    sListenerRef = NULL;   // CoronaLuaRef = void* — NULL means no listener
 
-    // Lua 5.1 table construction
+    // Lua 5.1: manual table construction
     lua_newtable(L);
     lua_pushcfunction(L, lua_init);        lua_setfield(L, -2, "init");
     lua_pushcfunction(L, lua_load);        lua_setfield(L, -2, "load");
