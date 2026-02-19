@@ -22,14 +22,8 @@ android {
     }
 }
 
-// Repositories are declared in settings.gradle (dependencyResolutionManagement)
-
 dependencies {
-    // IronSource (Unity LevelPlay) SDK 9.2.0 from https://android-sdk.is.com/
-    implementation 'com.ironsource.sdk:mediationsdk:9.2.0'
-    // Kotlin stdlib required by IronSource 9.x
+    implementation 'com.unity3d.ads-mediation:mediation-sdk:8.12.0'
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.0'
-
-    // Corona SDK — compileOnly; provided by Solar2D at runtime
     compileOnly fileTree(dir: 'libs', include: ['*.jar'])
 }
