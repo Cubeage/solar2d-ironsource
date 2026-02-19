@@ -22,9 +22,11 @@ android {
     }
 }
 
+// Repositories are declared in settings.gradle (dependencyResolutionManagement)
+
 dependencies {
-    // IronSource (Unity LevelPlay) SDK 9.2.0 — Maven Central
-    implementation 'com.unity3d.ads-mediation:mediation-sdk:9.2.0'
+    // IronSource (Unity LevelPlay) SDK 9.2.0 from https://android-sdk.is.com/
+    implementation 'com.ironsource.sdk:mediationsdk:9.2.0'
     // Kotlin stdlib required by IronSource 9.x
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.0'
 
