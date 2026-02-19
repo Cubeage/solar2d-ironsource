@@ -25,10 +25,10 @@ android {
 // Repositories declared in settings.gradle (dependencyResolutionManagement)
 
 dependencies {
-    // IronSource SDK 7.9.0 — has InterstitialListener, RewardedVideoListener APIs
-    // SDK 9.x changed API incompatibly (requires ad unit IDs); 7.9.0 is API-compatible
-    implementation 'com.ironsource.sdk:mediationsdk:7.9.0'
-    // Kotlin stdlib (required by IronSource)
+    // IronSource/LevelPlay SDK 9.2.0 — object-based API (LevelPlayInterstitialAd, LevelPlayRewardedAd)
+    // Replaces the removed static IronSource.* methods from SDK 7.x
+    implementation 'com.unity3d.ads-mediation:mediation-sdk:9.2.0'
+    // Kotlin stdlib (required by LevelPlay SDK)
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
 
     // Corona SDK — compileOnly; provided by Solar2D at runtime

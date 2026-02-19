@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------------
-// LuaLoader.java  –  Solar2D plugin bridge for IronSource SDK 7.9.0
+// LuaLoader.java  –  Solar2D plugin bridge for IronSource/LevelPlay SDK 9.x
 // Package: plugin.ironSource
-// API verified by bytecode inspection of CoronaCards-Android-2026.3728 and mediationsdk-7.9.0
+// API verified by bytecode inspection of mediation-sdk-9.2.0.aar
 // ----------------------------------------------------------------------------
 
 package plugin.ironSource;
@@ -14,25 +14,41 @@ import com.ansca.corona.CoronaLua;
 import com.ansca.corona.CoronaRuntime;
 import com.ansca.corona.CoronaRuntimeListener;
 
-import com.ironsource.mediationsdk.IronSource;
-import com.ironsource.mediationsdk.logger.IronSourceError;
-import com.ironsource.mediationsdk.model.Placement;
-import com.ironsource.mediationsdk.sdk.InitializationListener;
-import com.ironsource.mediationsdk.sdk.InterstitialListener;
-import com.ironsource.mediationsdk.sdk.RewardedVideoListener;
+import com.unity3d.mediation.LevelPlay;
+import com.unity3d.mediation.LevelPlayAdError;
+import com.unity3d.mediation.LevelPlayAdInfo;
+import com.unity3d.mediation.LevelPlayConfiguration;
+import com.unity3d.mediation.LevelPlayInitError;
+import com.unity3d.mediation.LevelPlayInitListener;
+import com.unity3d.mediation.LevelPlayInitRequest;
+import com.unity3d.mediation.interstitial.LevelPlayInterstitialAd;
+import com.unity3d.mediation.interstitial.LevelPlayInterstitialAdListener;
+import com.unity3d.mediation.rewarded.LevelPlayReward;
+import com.unity3d.mediation.rewarded.LevelPlayRewardedAd;
+import com.unity3d.mediation.rewarded.LevelPlayRewardedAdListener;
 
 import com.naef.jnlua.JavaFunction;
 import com.naef.jnlua.LuaState;
 import com.naef.jnlua.NamedJavaFunction;
 
 /**
- * Solar2D plugin entry point for IronSource SDK 7.9.0
+ * Solar2D plugin entry point for IronSource/LevelPlay SDK 9.x
  *
  * Lua API:
  *   ironSource.init(listener, options)
  *   ironSource.load(adUnitType)
  *   ironSource.show(adUnitType [, options])
  *   ironSource.isAvailable(adUnitType)  → boolean
+ *
+ * options table for init():
+ *   key                  = "appKey"           (required)
+ *   interstitialAdUnitId = "..."              (required for interstitial)
+ *   rewardedVideoAdUnitId = "..."             (required for rewarded)
+ *   userId               = "..."             (optional)
+ *   hasUserConsent       = true/false        (GDPR)
+ *   coppaUnderAge        = true/false        (COPPA)
+ *   ccpaDoNotSell        = true/false        (CCPA)
+ *   showDebugLog         = true/false
  */
 public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
 
@@ -43,6 +59,10 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
 
     /** Store the CoronaRuntime so we can access LuaState from callbacks. */
     private CoronaRuntime fRuntime;
+
+    /** LevelPlay ad unit objects – created after SDK init succeeds. */
+    private LevelPlayInterstitialAd interstitialAd;
+    private LevelPlayRewardedAd rewardedAd;
 
     // -------------------------------------------------------------------------
     // CoronaRuntimeListener
@@ -58,18 +78,12 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
 
     @Override
     public void onSuspended(CoronaRuntime runtime) {
-        final CoronaActivity activity = CoronaEnvironment.getCoronaActivity();
-        if (activity != null) {
-            IronSource.onPause(activity);
-        }
+        // SDK 9.x removed IronSource.onPause() — no-op
     }
 
     @Override
     public void onResumed(CoronaRuntime runtime) {
-        final CoronaActivity activity = CoronaEnvironment.getCoronaActivity();
-        if (activity != null) {
-            IronSource.onResume(activity);
-        }
+        // SDK 9.x removed IronSource.onResume() — no-op
     }
 
     @Override
@@ -80,8 +94,10 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 CoronaLua.deleteRef(L, listenerRef);
             }
         }
-        listenerRef = CoronaLua.REFNIL;
-        fRuntime = null;
+        listenerRef  = CoronaLua.REFNIL;
+        fRuntime     = null;
+        interstitialAd = null;
+        rewardedAd     = null;
     }
 
     // -------------------------------------------------------------------------
@@ -173,7 +189,8 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 return 0;
             }
 
-            // Read options
+            // --- Read options from Lua table ---
+
             L.getField(2, "key");
             final String appKey = L.isString(-1) ? L.toString(-1) : null;
             L.pop(1);
@@ -182,6 +199,14 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 Log.e(TAG, "ironSource.init() – options.key (appKey) is required");
                 return 0;
             }
+
+            L.getField(2, "interstitialAdUnitId");
+            final String interstitialAdUnitId = L.isString(-1) ? L.toString(-1) : null;
+            L.pop(1);
+
+            L.getField(2, "rewardedVideoAdUnitId");
+            final String rewardedVideoAdUnitId = L.isString(-1) ? L.toString(-1) : null;
+            L.pop(1);
 
             L.getField(2, "userId");
             final String userId = L.isString(-1) ? L.toString(-1) : null;
@@ -203,6 +228,8 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
             final boolean debug = L.isBoolean(-1) && L.toBoolean(-1);
             L.pop(1);
 
+            // --- Run init on UI thread ---
+
             final CoronaActivity activity = CoronaEnvironment.getCoronaActivity();
             if (activity == null) return 0;
 
@@ -210,108 +237,143 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 @Override
                 public void run() {
                     try {
-                        if (debug) {
-                            IronSource.setAdaptersDebug(true);
-                        }
+                        // Set privacy/consent flags BEFORE SDK init
+                        LevelPlay.setConsent(hasConsent);
+                        LevelPlay.setMetaData("is_coppa", coppa ? "true" : "false");
+                        LevelPlay.setMetaData("do_not_sell", ccpa ? "true" : "false");
 
-                        // SDK 9.x: setConsent(boolean) was removed.
-                        // Use MetaData API for GDPR/CCPA consent.
-                        IronSource.setMetaData("is_child_directed", "false");
-                        if (hasConsent) {
-                            IronSource.setMetaData("consent_status", "true");
+                        if (debug) {
+                            LevelPlay.setAdaptersDebug(true);
                         }
-                        IronSource.setMetaData("is_coppa", coppa ? "true" : "false");
-                        IronSource.setMetaData("do_not_sell", ccpa ? "true" : "false");
 
                         if (userId != null && !userId.isEmpty()) {
-                            IronSource.setUserId(userId);
+                            LevelPlay.setDynamicUserId(userId);
                         }
 
-                        // Register interstitial listener
-                        IronSource.setInterstitialListener(new InterstitialListener() {
-                            @Override
-                            public void onInterstitialAdReady() {
-                                dispatchEvent("interstitial", "loaded", false, null);
-                            }
+                        // Build LevelPlayInitRequest
+                        LevelPlayInitRequest.Builder builder =
+                                new LevelPlayInitRequest.Builder(appKey);
+                        if (userId != null && !userId.isEmpty()) {
+                            builder = builder.withUserId(userId);
+                        }
+                        final LevelPlayInitRequest initRequest = builder.build();
+
+                        // Initialise LevelPlay SDK
+                        LevelPlay.init(activity, initRequest, new LevelPlayInitListener() {
 
                             @Override
-                            public void onInterstitialAdLoadFailed(IronSourceError error) {
-                                dispatchEvent("interstitial", "show", true,
-                                        error != null ? error.getErrorMessage() : "load failed");
-                            }
+                            public void onInitSuccess(LevelPlayConfiguration configuration) {
+                                Log.d(TAG, "LevelPlay SDK initialized successfully");
 
-                            @Override
-                            public void onInterstitialAdOpened() {}
+                                // ---- Interstitial ----
+                                if (interstitialAdUnitId != null && !interstitialAdUnitId.isEmpty()) {
+                                    interstitialAd = new LevelPlayInterstitialAd(interstitialAdUnitId);
+                                    interstitialAd.setListener(new LevelPlayInterstitialAdListener() {
 
-                            @Override
-                            public void onInterstitialAdClosed() {
-                                dispatchEvent("interstitial", "closed", false, null);
-                            }
+                                        @Override
+                                        public void onAdLoaded(LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("interstitial", "loaded", false, null);
+                                        }
 
-                            @Override
-                            public void onInterstitialAdShowSucceeded() {
-                                dispatchEvent("interstitial", "show", false, null);
-                            }
+                                        @Override
+                                        public void onAdLoadFailed(LevelPlayAdError error) {
+                                            dispatchEvent("interstitial", "show", true,
+                                                    error != null ? error.getErrorMessage() : "load failed");
+                                        }
 
-                            @Override
-                            public void onInterstitialAdShowFailed(IronSourceError error) {
-                                dispatchEvent("interstitial", "show", true,
-                                        error != null ? error.getErrorMessage() : "show failed");
-                            }
+                                        @Override
+                                        public void onAdDisplayed(LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("interstitial", "show", false, null);
+                                        }
 
-                            @Override
-                            public void onInterstitialAdClicked() {}
-                        });
+                                        @Override
+                                        public void onAdDisplayFailed(LevelPlayAdError error,
+                                                                      LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("interstitial", "show", true,
+                                                    error != null ? error.getErrorMessage() : "show failed");
+                                        }
 
-                        // Register rewarded video listener
-                        IronSource.setRewardedVideoListener(new RewardedVideoListener() {
-                            @Override
-                            public void onRewardedVideoAvailabilityChanged(boolean available) {
-                                if (available) {
-                                    dispatchEvent("rewardedVideo", "available", false, null);
+                                        @Override
+                                        public void onAdClicked(LevelPlayAdInfo adInfo) {}
+
+                                        @Override
+                                        public void onAdClosed(LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("interstitial", "closed", false, null);
+                                            // Auto-preload next interstitial
+                                            if (interstitialAd != null) {
+                                                interstitialAd.loadAd();
+                                            }
+                                        }
+
+                                        @Override
+                                        public void onAdInfoChanged(LevelPlayAdInfo adInfo) {}
+                                    });
+                                    // Start pre-loading immediately after init
+                                    interstitialAd.loadAd();
+                                }
+
+                                // ---- Rewarded ----
+                                if (rewardedVideoAdUnitId != null && !rewardedVideoAdUnitId.isEmpty()) {
+                                    rewardedAd = new LevelPlayRewardedAd(rewardedVideoAdUnitId);
+                                    rewardedAd.setListener(new LevelPlayRewardedAdListener() {
+
+                                        @Override
+                                        public void onAdLoaded(LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("rewardedVideo", "available", false, null);
+                                        }
+
+                                        @Override
+                                        public void onAdLoadFailed(LevelPlayAdError error) {
+                                            dispatchEvent("rewardedVideo", "show", true,
+                                                    error != null ? error.getErrorMessage() : "load failed");
+                                        }
+
+                                        @Override
+                                        public void onAdDisplayed(LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("rewardedVideo", "show", false, null);
+                                        }
+
+                                        @Override
+                                        public void onAdDisplayFailed(LevelPlayAdError error,
+                                                                      LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("rewardedVideo", "show", true,
+                                                    error != null ? error.getErrorMessage() : "show failed");
+                                        }
+
+                                        @Override
+                                        public void onAdRewarded(LevelPlayReward reward,
+                                                                 LevelPlayAdInfo adInfo) {
+                                            String rewardName = (reward != null) ? reward.getName() : null;
+                                            dispatchEvent("rewardedVideo", "reward", false, rewardName);
+                                        }
+
+                                        @Override
+                                        public void onAdClicked(LevelPlayAdInfo adInfo) {}
+
+                                        @Override
+                                        public void onAdClosed(LevelPlayAdInfo adInfo) {
+                                            dispatchEvent("rewardedVideo", "closed", false, null);
+                                            // Auto-reload for next show
+                                            if (rewardedAd != null) {
+                                                rewardedAd.loadAd();
+                                            }
+                                        }
+
+                                        @Override
+                                        public void onAdInfoChanged(LevelPlayAdInfo adInfo) {}
+                                    });
+                                    // SDK 9.x: rewarded is NO LONGER auto-loaded; must call manually
+                                    rewardedAd.loadAd();
                                 }
                             }
 
                             @Override
-                            public void onRewardedVideoAdRewarded(Placement placement) {
-                                String name = placement != null ? placement.getPlacementName() : null;
-                                dispatchEvent("rewardedVideo", "reward", false, name);
+                            public void onInitFailed(LevelPlayInitError error) {
+                                String msg = (error != null) ? error.getErrorMessage() : "init failed";
+                                Log.e(TAG, "LevelPlay SDK init failed: " + msg);
+                                dispatchEvent("init", "failed", true, msg);
                             }
-
-                            @Override
-                            public void onRewardedVideoAdShowFailed(IronSourceError error) {
-                                dispatchEvent("rewardedVideo", "show", true,
-                                        error != null ? error.getErrorMessage() : "show failed");
-                            }
-
-                            @Override
-                            public void onRewardedVideoAdOpened() {}
-
-                            @Override
-                            public void onRewardedVideoAdClosed() {
-                                dispatchEvent("rewardedVideo", "closed", false, null);
-                            }
-
-                            @Override
-                            public void onRewardedVideoAdStarted() {}
-
-                            @Override
-                            public void onRewardedVideoAdEnded() {}
-
-                            @Override
-                            public void onRewardedVideoAdClicked(Placement placement) {}
                         });
-
-                        // Initialise IronSource SDK
-                        IronSource.init(activity, appKey,
-                                new InitializationListener() {
-                                    @Override
-                                    public void onInitializationComplete() {
-                                        Log.d(TAG, "IronSource SDK initialized successfully");
-                                    }
-                                },
-                                IronSource.AD_UNIT.INTERSTITIAL,
-                                IronSource.AD_UNIT.REWARDED_VIDEO);
 
                     } catch (Exception e) {
                         Log.e(TAG, "ironSource.init() error: " + e.getMessage());
@@ -345,9 +407,17 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 @Override
                 public void run() {
                     if ("interstitial".equals(adUnitType)) {
-                        IronSource.loadInterstitial();
+                        if (interstitialAd != null) {
+                            interstitialAd.loadAd();
+                        } else {
+                            Log.w(TAG, "ironSource.load(interstitial) – ad object not ready yet");
+                        }
                     } else if ("rewardedVideo".equals(adUnitType)) {
-                        Log.d(TAG, "rewardedVideo is auto-loaded by IronSource SDK after init");
+                        if (rewardedAd != null) {
+                            rewardedAd.loadAd();
+                        } else {
+                            Log.w(TAG, "ironSource.load(rewardedVideo) – ad object not ready yet");
+                        }
                     } else {
                         Log.e(TAG, "ironSource.load() – unknown adUnitType: " + adUnitType);
                     }
@@ -388,21 +458,21 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 @Override
                 public void run() {
                     if ("interstitial".equals(adUnitType)) {
-                        if (IronSource.isInterstitialReady()) {
+                        if (interstitialAd != null && interstitialAd.isAdReady()) {
                             if (finalPlacement != null && !finalPlacement.isEmpty()) {
-                                IronSource.showInterstitial(finalPlacement);
+                                interstitialAd.showAd(activity, finalPlacement);
                             } else {
-                                IronSource.showInterstitial();
+                                interstitialAd.showAd(activity);
                             }
                         } else {
                             dispatchEvent("interstitial", "show", true, "not ready");
                         }
                     } else if ("rewardedVideo".equals(adUnitType)) {
-                        if (IronSource.isRewardedVideoAvailable()) {
+                        if (rewardedAd != null && rewardedAd.isAdReady()) {
                             if (finalPlacement != null && !finalPlacement.isEmpty()) {
-                                IronSource.showRewardedVideo(finalPlacement);
+                                rewardedAd.showAd(activity, finalPlacement);
                             } else {
-                                IronSource.showRewardedVideo();
+                                rewardedAd.showAd(activity);
                             }
                         } else {
                             dispatchEvent("rewardedVideo", "show", true, "not available");
@@ -430,12 +500,12 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 L.pushBoolean(false);
                 return 1;
             }
-            String adUnitType = L.toString(1);
+            final String adUnitType = L.toString(1);
             boolean available = false;
             if ("interstitial".equals(adUnitType)) {
-                available = IronSource.isInterstitialReady();
+                available = interstitialAd != null && interstitialAd.isAdReady();
             } else if ("rewardedVideo".equals(adUnitType)) {
-                available = IronSource.isRewardedVideoAvailable();
+                available = rewardedAd != null && rewardedAd.isAdReady();
             }
             L.pushBoolean(available);
             return 1;
