@@ -1,14 +1,14 @@
 // plugin_ironSource.mm
 // Solar2D iOS plugin bridge for IronSource (Unity LevelPlay) SDK 7.9.0
 // ----------------------------------------------------------------------------
-// API notes (IronSource 7.9.0):
-//   - IS_INTERSTITIAL / IS_REWARDED_VIDEO (not IS_AD_UNIT_*)
-//   - hasInterstitial (not isInterstitialReady)
-//   - LevelPlayInterstitialDelegate (ISInterstitialDelegate deprecated since 7.3.0)
-//   - LevelPlayRewardedVideoDelegate (ISRewardedVideoDelegate deprecated since 7.3.0)
-// Corona:
-//   - CoronaLuaRef is void* — use NULL as sentinel (not LUA_NOREF)
-//   - Solar2D uses Lua 5.1 — use lua_pushcfunction/lua_setfield not luaL_setfuncs
+// DESIGN: LevelPlayInterstitialDelegate and LevelPlayRewardedVideoDelegate share
+//         method signatures (didFailToShowWithError:andAdInfo:, didOpenWithAdInfo:,
+//         didCloseWithAdInfo:). We must use SEPARATE delegate objects per ad type.
+// API notes:
+//   IS_INTERSTITIAL / IS_REWARDED_VIDEO (not IS_AD_UNIT_* which don't exist in 7.9.0)
+//   hasInterstitial (not isInterstitialReady)
+//   CoronaLuaRef is void* — NULL sentinel (not LUA_NOREF)
+//   Lua 5.1: lua_pushcfunction/lua_setfield (not luaL_setfuncs)
 // ----------------------------------------------------------------------------
 
 #import <Foundation/Foundation.h>
@@ -20,138 +20,137 @@
 #import "CoronaLibrary.h"
 
 // ----------------------------------------------------------------------------
-#pragma mark - Plugin class
+// Shared state (simple globals for plugin singleton pattern)
 // ----------------------------------------------------------------------------
 
-@interface IronSourcePlugin : NSObject <LevelPlayInterstitialDelegate, LevelPlayRewardedVideoDelegate>
-@property (nonatomic, assign) lua_State    *L;
-@property (nonatomic, assign) CoronaLuaRef  listenerRef;  // void* — NULL = no listener
-+ (instancetype)sharedInstance;
-- (void)dispatchType:(NSString *)type phase:(NSString *)phase isError:(BOOL)isError response:(NSString *)response;
-@end
+static lua_State    *sL           = NULL;
+static CoronaLuaRef  sListenerRef = NULL;   // void* — NULL = no listener
 
-@implementation IronSourcePlugin
-
-+ (instancetype)sharedInstance {
-    static IronSourcePlugin *s = nil;
-    static dispatch_once_t token;
-    dispatch_once(&token, ^{ s = [[IronSourcePlugin alloc] init]; s.listenerRef = NULL; });
-    return s;
-}
-
-- (void)dispatchType:(NSString *)type phase:(NSString *)phase isError:(BOOL)isError response:(NSString *)response {
+static void DispatchEvent(const char *type, const char *phase, BOOL isError, NSString *response) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        lua_State *L = self.L;
-        if (!L || !self.listenerRef) return;
-
-        CoronaLuaNewEvent(L, "ironSource");
-        lua_pushstring(L, [type UTF8String]);  lua_setfield(L, -2, "type");
-        lua_pushstring(L, [phase UTF8String]); lua_setfield(L, -2, "phase");
-        lua_pushboolean(L, isError ? 1 : 0);   lua_setfield(L, -2, "isError");
-        if (response) { lua_pushstring(L, [response UTF8String]); lua_setfield(L, -2, "response"); }
-        CoronaLuaDispatchEvent(L, self.listenerRef, 0);
+        if (!sL || !sListenerRef) return;
+        CoronaLuaNewEvent(sL, "ironSource");
+        lua_pushstring(sL, type);               lua_setfield(sL, -2, "type");
+        lua_pushstring(sL, phase);              lua_setfield(sL, -2, "phase");
+        lua_pushboolean(sL, isError ? 1 : 0);  lua_setfield(sL, -2, "isError");
+        if (response) { lua_pushstring(sL, [response UTF8String]); lua_setfield(sL, -2, "response"); }
+        CoronaLuaDispatchEvent(sL, sListenerRef, 0);
     });
 }
 
-// ---- LevelPlayInterstitialDelegate ----
+// ----------------------------------------------------------------------------
+// Interstitial delegate
+// ----------------------------------------------------------------------------
+
+@interface ISPluginInterstitialDelegate : NSObject <LevelPlayInterstitialDelegate>
+@end
+
+@implementation ISPluginInterstitialDelegate
 
 - (void)didLoadWithAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"interstitial" phase:@"loaded" isError:NO response:nil];
+    DispatchEvent("interstitial", "loaded", NO, nil);
 }
 - (void)didFailToLoadWithError:(NSError *)error {
-    [self dispatchType:@"interstitial" phase:@"show" isError:YES
-              response:error ? [error localizedDescription] : @"load failed"];
+    DispatchEvent("interstitial", "show", YES, error ? [error localizedDescription] : @"load failed");
 }
 - (void)didOpenWithAdInfo:(ISAdInfo *)adInfo {}
 - (void)didShowWithAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"interstitial" phase:@"show" isError:NO response:nil];
+    DispatchEvent("interstitial", "show", NO, nil);
 }
 - (void)didFailToShowWithError:(NSError *)error andAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"interstitial" phase:@"show" isError:YES
-              response:error ? [error localizedDescription] : @"show failed"];
+    DispatchEvent("interstitial", "show", YES, error ? [error localizedDescription] : @"show failed");
 }
 - (void)didClickWithAdInfo:(ISAdInfo *)adInfo {}
 - (void)didCloseWithAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"interstitial" phase:@"closed" isError:NO response:nil];
+    DispatchEvent("interstitial", "closed", NO, nil);
 }
 
-// ---- LevelPlayRewardedVideoDelegate (extends LevelPlayRewardedVideoBaseDelegate) ----
+@end
 
+// ----------------------------------------------------------------------------
+// Rewarded video delegate
+// ----------------------------------------------------------------------------
+
+@interface ISPluginRewardedVideoDelegate : NSObject <LevelPlayRewardedVideoDelegate>
+@end
+
+@implementation ISPluginRewardedVideoDelegate
+
+// LevelPlayRewardedVideoDelegate (adds availability)
 - (void)hasAvailableAdWithAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"rewardedVideo" phase:@"available" isError:NO response:nil];
+    DispatchEvent("rewardedVideo", "available", NO, nil);
 }
 - (void)hasNoAvailableAd {}
 
+// LevelPlayRewardedVideoBaseDelegate (required)
 - (void)didReceiveRewardForPlacement:(ISPlacementInfo *)placementInfo withAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"rewardedVideo" phase:@"reward" isError:NO
-              response:placementInfo ? placementInfo.placementName : nil];
+    DispatchEvent("rewardedVideo", "reward", NO, placementInfo ? placementInfo.placementName : nil);
 }
 - (void)didFailToShowWithError:(NSError *)error andAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"rewardedVideo" phase:@"show" isError:YES
-              response:error ? [error localizedDescription] : @"show failed"];
+    DispatchEvent("rewardedVideo", "show", YES, error ? [error localizedDescription] : @"show failed");
 }
 - (void)didOpenWithAdInfo:(ISAdInfo *)adInfo {}
 - (void)didClick:(ISPlacementInfo *)placementInfo withAdInfo:(ISAdInfo *)adInfo {}
 - (void)didCloseWithAdInfo:(ISAdInfo *)adInfo {
-    [self dispatchType:@"rewardedVideo" phase:@"closed" isError:NO response:nil];
+    DispatchEvent("rewardedVideo", "closed", NO, nil);
 }
 
 @end
 
+// Delegate singletons
+static ISPluginInterstitialDelegate  *sInterstitialDelegate  = nil;
+static ISPluginRewardedVideoDelegate *sRewardedVideoDelegate  = nil;
+
 // ----------------------------------------------------------------------------
-#pragma mark - Lua API
+// Lua API
 // ----------------------------------------------------------------------------
 
 static int lua_init(lua_State *L) {
     if (!CoronaLuaIsListener(L, 1, "ironSource")) {
-        luaL_error(L, "ironSource.init: arg 1 must be a listener function");
-        return 0;
+        luaL_error(L, "ironSource.init: arg 1 must be a listener"); return 0;
     }
-    IronSourcePlugin *p = [IronSourcePlugin sharedInstance];
-    p.L = L;
-    if (p.listenerRef) { CoronaLuaDeleteRef(L, p.listenerRef); }
-    p.listenerRef = CoronaLuaNewRef(L, 1);
+    sL = L;
+    if (sListenerRef) { CoronaLuaDeleteRef(L, sListenerRef); }
+    sListenerRef = CoronaLuaNewRef(L, 1);
 
     if (lua_gettop(L) < 2 || !lua_istable(L, 2)) {
         luaL_error(L, "ironSource.init: arg 2 must be options table"); return 0;
     }
 
-#define GET_STRING(field) ({ lua_getfield(L,2,#field); NSString *v = lua_isstring(L,-1) ? @(lua_tostring(L,-1)) : nil; lua_pop(L,1); v; })
-#define GET_BOOL(field)   ({ lua_getfield(L,2,#field); BOOL   v = lua_isboolean(L,-1) && lua_toboolean(L,-1); lua_pop(L,1); v; })
+#define GSTR(f) ({ lua_getfield(L,2,f); NSString *v=lua_isstring(L,-1)?@(lua_tostring(L,-1)):nil; lua_pop(L,1); v; })
+#define GBOOL(f) ({ lua_getfield(L,2,f); BOOL v=lua_isboolean(L,-1)&&(BOOL)lua_toboolean(L,-1); lua_pop(L,1); v; })
 
-    NSString *appKey    = GET_STRING(key);
-    NSString *userId    = GET_STRING(userId);
-    NSString *attStatus = GET_STRING(attStatus);
-    BOOL hasConsent     = GET_BOOL(hasUserConsent);
-    BOOL coppa          = GET_BOOL(coppaUnderAge);
-    BOOL ccpa           = GET_BOOL(ccpaDoNotSell);
-    BOOL debug          = GET_BOOL(showDebugLog);
+    NSString *appKey    = GSTR("key");
+    NSString *userId    = GSTR("userId");
+    NSString *attStatus = GSTR("attStatus");
+    BOOL hasConsent     = GBOOL("hasUserConsent");
+    BOOL coppa          = GBOOL("coppaUnderAge");
+    BOOL ccpa           = GBOOL("ccpaDoNotSell");
+    BOOL debug          = GBOOL("showDebugLog");
 
-#undef GET_STRING
-#undef GET_BOOL
+#undef GSTR
+#undef GBOOL
 
     if (!appKey.length) { luaL_error(L, "ironSource.init: options.key required"); return 0; }
 
-    NSString *appKeyC    = [appKey copy];
-    NSString *userIdC    = [userId copy];
-    NSString *attStatusC = [attStatus copy];
+    NSString *appKeyC = [appKey copy], *userIdC = [userId copy], *attC = [attStatus copy];
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (debug)        [IronSource setAdaptersDebug:YES];
+        if (debug) [IronSource setAdaptersDebug:YES];
         [IronSource setConsent:hasConsent];
         [IronSource setMetaDataWithKey:@"is_coppa"    value:coppa ? @"true" : @"false"];
         [IronSource setMetaDataWithKey:@"do_not_sell" value:ccpa  ? @"true" : @"false"];
-        if ([attStatusC isEqualToString:@"authorized"]) {
-            [IronSource setMetaDataWithKey:@"ATTStatus" value:@"1"];
-        }
+        if ([attC isEqualToString:@"authorized"]) [IronSource setMetaDataWithKey:@"ATTStatus" value:@"1"];
         if (userIdC.length) [IronSource setUserId:userIdC];
 
-        IronSourcePlugin *plugin = [IronSourcePlugin sharedInstance];
-        [IronSource setLevelPlayInterstitialDelegate:plugin];
-        [IronSource setLevelPlayRewardedVideoDelegate:plugin];
+        // Create separate delegate objects (avoids duplicate method signature issues)
+        if (!sInterstitialDelegate)  sInterstitialDelegate  = [[ISPluginInterstitialDelegate  alloc] init];
+        if (!sRewardedVideoDelegate) sRewardedVideoDelegate = [[ISPluginRewardedVideoDelegate alloc] init];
 
-        [IronSource initWithAppKey:appKeyC
-                          adUnits:@[IS_INTERSTITIAL, IS_REWARDED_VIDEO]];
+        [IronSource setLevelPlayInterstitialDelegate:sInterstitialDelegate];
+        [IronSource setLevelPlayRewardedVideoDelegate:sRewardedVideoDelegate];
+
+        [IronSource initWithAppKey:appKeyC adUnits:@[IS_INTERSTITIAL, IS_REWARDED_VIDEO]];
     });
     return 0;
 }
@@ -161,7 +160,6 @@ static int lua_load(lua_State *L) {
     NSString *adType = @(lua_tostring(L, 1));
     dispatch_async(dispatch_get_main_queue(), ^{
         if ([adType isEqualToString:@"interstitial"]) [IronSource loadInterstitial];
-        // rewardedVideo auto-loaded by IronSource SDK after init
     });
     return 0;
 }
@@ -175,26 +173,20 @@ static int lua_show(lua_State *L) {
         if (lua_isstring(L, -1)) placement = @(lua_tostring(L, -1));
         lua_pop(L, 1);
     }
-    NSString *finalPlacement = [placement copy];
+    NSString *fp = [placement copy];
 
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *vc = [UIApplication sharedApplication].keyWindow.rootViewController;
         if ([adType isEqualToString:@"interstitial"]) {
-            if ([IronSource hasInterstitial]) {
-                [IronSource showInterstitialWithViewController:vc
-                             placement:finalPlacement.length ? finalPlacement : nil];
-            } else {
-                [[IronSourcePlugin sharedInstance] dispatchType:@"interstitial"
-                    phase:@"show" isError:YES response:@"not ready"];
-            }
+            if ([IronSource hasInterstitial])
+                [IronSource showInterstitialWithViewController:vc placement:fp.length ? fp : nil];
+            else
+                DispatchEvent("interstitial", "show", YES, @"not ready");
         } else if ([adType isEqualToString:@"rewardedVideo"]) {
-            if ([IronSource hasRewardedVideo]) {
-                [IronSource showRewardedVideoWithViewController:vc
-                              placement:finalPlacement.length ? finalPlacement : nil];
-            } else {
-                [[IronSourcePlugin sharedInstance] dispatchType:@"rewardedVideo"
-                    phase:@"show" isError:YES response:@"not available"];
-            }
+            if ([IronSource hasRewardedVideo])
+                [IronSource showRewardedVideoWithViewController:vc placement:fp.length ? fp : nil];
+            else
+                DispatchEvent("rewardedVideo", "show", YES, @"not available");
         }
     });
     return 0;
@@ -203,24 +195,23 @@ static int lua_show(lua_State *L) {
 static int lua_isAvailable(lua_State *L) {
     if (!lua_isstring(L, 1)) { lua_pushboolean(L, 0); return 1; }
     NSString *adType = @(lua_tostring(L, 1));
-    BOOL available = NO;
-    if ([adType isEqualToString:@"interstitial"])  available = [IronSource hasInterstitial];
-    if ([adType isEqualToString:@"rewardedVideo"]) available = [IronSource hasRewardedVideo];
-    lua_pushboolean(L, available ? 1 : 0);
+    BOOL v = NO;
+    if ([adType isEqualToString:@"interstitial"])  v = [IronSource hasInterstitial];
+    if ([adType isEqualToString:@"rewardedVideo"]) v = [IronSource hasRewardedVideo];
+    lua_pushboolean(L, v ? 1 : 0);
     return 1;
 }
 
 // ----------------------------------------------------------------------------
-#pragma mark - Entry point
+// Entry point
 // ----------------------------------------------------------------------------
 
 CORONA_EXPORT
 int luaopen_plugin_ironSource(lua_State *L) {
-    IronSourcePlugin *p = [IronSourcePlugin sharedInstance];
-    p.L           = L;
-    p.listenerRef = NULL;  // CoronaLuaRef = void* — NULL not LUA_NOREF
+    sL           = L;
+    sListenerRef = NULL;  // CoronaLuaRef = void* — NULL means no listener
 
-    // Lua 5.1: manual table construction (luaL_setfuncs is Lua 5.2+)
+    // Lua 5.1: manual table construction
     lua_newtable(L);
     lua_pushcfunction(L, lua_init);        lua_setfield(L, -2, "init");
     lua_pushcfunction(L, lua_load);        lua_setfield(L, -2, "load");
