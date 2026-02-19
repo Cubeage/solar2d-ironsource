@@ -1,13 +1,19 @@
 // corona.gradle — injected by CoronaBuilder into the end-user app's Gradle build.
-// Pulls IronSource SDK at app-build time.
+// Pulls IronSource (Unity LevelPlay) SDK at app-build time.
 
 repositories {
     google()
     mavenCentral()
-    maven { url 'https://android-sdk.is.com/' }
+}
+
+// Exclude legacy standalone kotlin-stdlib-jdk7/jdk8 to avoid duplicate class
+// conflicts when Solar2D brings in an older kotlin-stdlib-jdk* alongside
+// IronSource SDK 9.x which transitively requires kotlin-stdlib 1.8+.
+configurations.all {
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
 }
 
 dependencies {
-    implementation 'com.ironsource.sdk:mediationsdk:7.9.0'
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+    implementation 'com.unity3d.ads-mediation:mediation-sdk:9.2.0'
 }
