@@ -21,16 +21,16 @@ jobs:
 
       # Download CoronaCards-Android zip to extract Corona.jar
       - name: Fetch Solar2D Corona.jar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE_URL="https://api.github.com/repos/coronalabs/corona/releases/latest"
-          ASSET_URL=$(curl -s "$RELEASE_URL" | \
-            python3 -c "import sys,json; data=json.load(sys.stdin); \
-            print(next(a['browser_download_url'] for a in data['assets'] if 'CoronaCards-Android' in a['name']))")
+          ASSET_URL=$(gh api repos/coronalabs/corona/releases/latest \
+            --jq '.assets[] | select(.name | startswith("CoronaCards-Android")) | .browser_download_url')
           echo "Downloading: $ASSET_URL"
           curl -L "$ASSET_URL" -o CoronaCards-Android.zip
           unzip -o CoronaCards-Android.zip -d coronacards_android
           mkdir -p android/libs
-          # The jar is typically at CoronaCards/Corona.jar or similar
+          # Copy all jars found in the zip to android/libs/
           find coronacards_android -name "*.jar" | while read f; do
             echo "Found jar: $f"
             cp "$f" android/libs/
@@ -38,19 +38,11 @@ jobs:
           ls -la android/libs/
 
       - name: Make gradlew executable
-        run: chmod +x android/gradlew 2>/dev/null || true
-
-      - name: Setup Gradle wrapper (if not present)
-        run: |
-          if [ ! -f android/gradlew ]; then
-            cd android
-            gradle wrapper --gradle-version 8.4
-          fi
+        run: chmod +x android/gradlew
 
       - name: Build AAR
         run: |
           cd android
-          chmod +x gradlew
           ./gradlew assembleRelease --stacktrace
 
       - name: Locate AAR

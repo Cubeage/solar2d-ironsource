@@ -1,5 +1,5 @@
 plugins {
-    id 'com.android.library' version '8.2.2' apply true
+    id 'com.android.library'
 }
 
 android {
@@ -20,12 +20,6 @@ android {
             minifyEnabled false
         }
     }
-}
-
-repositories {
-    google()
-    mavenCentral()
-    maven { url 'https://android-sdk.is.com/' }
 }
 
 dependencies {
