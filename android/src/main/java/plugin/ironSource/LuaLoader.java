@@ -264,6 +264,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                             @Override
                             public void onInitSuccess(LevelPlayConfiguration configuration) {
                                 Log.d(TAG, "LevelPlay SDK initialized successfully");
+                                dispatchEvent("init", "success", false, null);
 
                                 // ---- Interstitial ----
                                 if (interstitialAdUnitId != null && !interstitialAdUnitId.isEmpty()) {
@@ -369,7 +370,9 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
 
                             @Override
                             public void onInitFailed(LevelPlayInitError error) {
-                                String msg = (error != null) ? error.getErrorMessage() : "init failed";
+                                String msg = (error != null)
+                                        ? (error.getErrorMessage() + " - " + error.getErrorCode())
+                                        : "unknown";
                                 Log.e(TAG, "LevelPlay SDK init failed: " + msg);
                                 dispatchEvent("init", "failed", true, msg);
                             }
