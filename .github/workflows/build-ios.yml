@@ -14,13 +14,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download IronSource iOS SDK 7.9.0
+      - name: Download IronSource iOS SDK 9.3.0
         run: |
           # Direct download from ironsource-mobile/iOS-sdk GitHub repo
-          curl -L "https://raw.githubusercontent.com/ironsource-mobile/iOS-sdk/master/7.9.0/IronSource7.9.0.zip" \
-               -o IronSource7.9.0.zip
+          curl -L "https://raw.githubusercontent.com/ironsource-mobile/iOS-sdk/master/9.3.0/IronSource9.3.0.zip" \
+               -o IronSource9.3.0.zip
           mkdir -p ironsource_sdk
-          unzip -q IronSource7.9.0.zip -d ironsource_sdk
+          unzip -q IronSource9.3.0.zip -d ironsource_sdk
 
           # Find the xcframework
           XCFW=$(find ironsource_sdk -type d -name "IronSource.xcframework" | head -1)
