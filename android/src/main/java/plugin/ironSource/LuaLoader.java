@@ -1,6 +1,7 @@
 // ----------------------------------------------------------------------------
 // LuaLoader.java  –  Solar2D plugin bridge for IronSource SDK 7.9.0
 // Package: plugin.ironSource
+// API verified by bytecode inspection of CoronaCards-Android-2026.3728 and mediationsdk-7.9.0
 // ----------------------------------------------------------------------------
 
 package plugin.ironSource;
@@ -40,12 +41,17 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
     /** Lua registry reference to the Lua listener function. */
     private int listenerRef = CoronaLua.REFNIL;
 
+    /** Store the CoronaRuntime so we can access LuaState from callbacks. */
+    private CoronaRuntime fRuntime;
+
     // -------------------------------------------------------------------------
     // CoronaRuntimeListener
     // -------------------------------------------------------------------------
 
     @Override
-    public void onLoaded(CoronaRuntime runtime) {}
+    public void onLoaded(CoronaRuntime runtime) {
+        fRuntime = runtime;
+    }
 
     @Override
     public void onStarted(CoronaRuntime runtime) {}
@@ -68,11 +74,14 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
 
     @Override
     public void onExiting(CoronaRuntime runtime) {
-        final CoronaActivity activity = CoronaEnvironment.getCoronaActivity();
-        if (activity != null && listenerRef != CoronaLua.REFNIL) {
-            CoronaLua.deleteRef(activity.getLuaState(), listenerRef);
+        if (runtime != null && listenerRef != CoronaLua.REFNIL) {
+            LuaState L = runtime.getLuaState();
+            if (L != null) {
+                CoronaLua.deleteRef(L, listenerRef);
+            }
         }
         listenerRef = CoronaLua.REFNIL;
+        fRuntime = null;
     }
 
     // -------------------------------------------------------------------------
@@ -83,13 +92,21 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
     public int invoke(LuaState L) {
         CoronaEnvironment.addRuntimeListener(this);
 
-        NamedJavaFunction[] funcs = {
-            new InitWrapper(),
-            new LoadWrapper(),
-            new ShowWrapper(),
-            new IsAvailableWrapper(),
-        };
-        CoronaLua.newLibrary(L, funcs);
+        // Create and return a Lua table of functions
+        L.newTable();
+
+        L.pushJavaFunction(new InitWrapper());
+        L.setField(-2, "init");
+
+        L.pushJavaFunction(new LoadWrapper());
+        L.setField(-2, "load");
+
+        L.pushJavaFunction(new ShowWrapper());
+        L.setField(-2, "show");
+
+        L.pushJavaFunction(new IsAvailableWrapper());
+        L.setField(-2, "isAvailable");
+
         return 1;
     }
 
@@ -105,10 +122,10 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                CoronaRuntime runtime = CoronaEnvironment.getCoronaRuntime();
-                if (runtime == null) return;
-                LuaState L = runtime.getLuaState();
+                if (fRuntime == null) return;
+                LuaState L = fRuntime.getLuaState();
                 if (L == null) return;
+                if (listenerRef == CoronaLua.REFNIL) return;
 
                 CoronaLua.newEvent(L, "ironSource");
 
@@ -129,7 +146,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 try {
                     CoronaLua.dispatchEvent(L, listenerRef, 0);
                 } catch (Exception e) {
-                    Log.e(TAG, "Error dispatching event: " + e.getMessage());
+                    Log.e(TAG, "Error dispatching ironSource event: " + e.getMessage());
                 }
             }
         });
@@ -285,7 +302,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                                 new InitializationListener() {
                                     @Override
                                     public void onInitializationComplete() {
-                                        Log.d(TAG, "IronSource SDK initialized");
+                                        Log.d(TAG, "IronSource SDK initialized successfully");
                                     }
                                 },
                                 IronSource.AD_UNIT.INTERSTITIAL,
@@ -325,7 +342,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                     if ("interstitial".equals(adUnitType)) {
                         IronSource.loadInterstitial();
                     } else if ("rewardedVideo".equals(adUnitType)) {
-                        Log.d(TAG, "rewardedVideo auto-loaded by IronSource SDK");
+                        Log.d(TAG, "rewardedVideo is auto-loaded by IronSource SDK after init");
                     } else {
                         Log.e(TAG, "ironSource.load() – unknown adUnitType: " + adUnitType);
                     }
