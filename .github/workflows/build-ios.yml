@@ -19,18 +19,17 @@ jobs:
         run: |
           ASSET_URL=$(gh api repos/coronalabs/corona/releases/latest \
             --jq '[.assets[] | select((.name | startswith("CoronaCards-iOS-")) and (.name | endswith(".zip")) and (.name | contains("MetalANGLE") | not))][0] | .browser_download_url')
-          echo "Downloading: $ASSET_URL"
+          echo "Downloading Corona headers: $ASSET_URL"
           curl -L "$ASSET_URL" -o CoronaCards-iOS.zip
           unzip -o CoronaCards-iOS.zip -d coronacards_ios
           mkdir -p corona_ios_sdk/include
           HEADER=$(find coronacards_ios -name "CoronaLua.h" | head -1)
           if [ -n "$HEADER" ]; then
-            HEADER_DIR=$(dirname "$HEADER")
-            cp "$HEADER_DIR"/*.h corona_ios_sdk/include/ 2>/dev/null || true
-            echo "Copied Corona headers from: $HEADER_DIR"
+            cp "$(dirname "$HEADER")"/*.h corona_ios_sdk/include/ 2>/dev/null || true
+            echo "Copied Corona headers"
             ls corona_ios_sdk/include/
           else
-            echo "CoronaLua.h not in zip, falling back to DMG..."
+            echo "Falling back to Solar2D DMG..."
             DMG_URL=$(gh api repos/coronalabs/corona/releases/latest \
               --jq '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url')
             curl -L "$DMG_URL" -o Solar2D.dmg
@@ -44,50 +43,18 @@ jobs:
             hdiutil detach /Volumes/Solar2D -quiet
           fi
 
-      - name: Setup IronSource iOS SDK via CocoaPods
+      - name: Download IronSource iOS SDK 7.9.0 directly
         run: |
-          mkdir -p /tmp/ironsource_pod/App.xcodeproj
-          python3 - << 'PYEOF'
-          import os
-          base = '/tmp/ironsource_pod'
-          os.makedirs(base + '/App.xcodeproj', exist_ok=True)
-          open(base + '/Podfile', 'w').write(
-            "platform :ios, '12.0'\nuse_frameworks!\ntarget 'App' do\n  pod 'IronSourceSDK', '~> 9.2'\nend\n"
-          )
-          pbx = (
-            "// !$*UTF8*$!\n{\n"
-            "  archiveVersion = 1;\n  classes = {};\n  objectVersion = 56;\n  objects = {\n"
-            "    A1 = {isa = PBXProject; buildConfigurationList = A2; compatibilityVersion = \"Xcode 14.0\"; mainGroup = A3; targets = (A4); };\n"
-            "    A2 = {isa = XCConfigurationList; buildConfigurations = (A5, A6); defaultConfigurationName = Release; };\n"
-            "    A3 = {isa = PBXGroup; children = (); sourceTree = \"<group>\"; };\n"
-            "    A4 = {isa = PBXNativeTarget; buildConfigurationList = A7; buildPhases = (); name = App; productType = \"com.apple.product-type.application\"; };\n"
-            "    A5 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = App; SDKROOT = iphoneos;}; name = Debug; };\n"
-            "    A6 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = App; SDKROOT = iphoneos;}; name = Release; };\n"
-            "    A7 = {isa = XCConfigurationList; buildConfigurations = (A5, A6); defaultConfigurationName = Release; };\n"
-            "  };\n  rootObject = A1;\n}\n"
-          )
-          open(base + '/App.xcodeproj/project.pbxproj', 'w').write(pbx)
-          print('Written Podfile and xcodeproj')
-          PYEOF
-
-          cd /tmp/ironsource_pod
-          pod install --repo-update 2>&1 | tail -30 || true
-
-          echo "Searching for IronSource framework..."
-          XCFW=$(find /tmp/ironsource_pod -name "IronSource.xcframework" 2>/dev/null | head -1)
-          FW=$(find /tmp/ironsource_pod -name "IronSource.framework" 2>/dev/null | head -1)
-          FRAMEWORK="${XCFW:-$FW}"
-
-          if [ -n "$FRAMEWORK" ]; then
-            mkdir -p "$GITHUB_WORKSPACE/ironsource_framework"
-            cp -r "$FRAMEWORK" "$GITHUB_WORKSPACE/ironsource_framework/"
-            echo "IRONSOURCE_FW=$GITHUB_WORKSPACE/ironsource_framework/$(basename "$FRAMEWORK")" >> "$GITHUB_ENV"
-            echo "Found: $FRAMEWORK"
-          else
-            echo "ERROR: IronSource framework not found"
-            find /tmp/ironsource_pod -maxdepth 5 | head -30
-            exit 1
-          fi
+          # Direct download from ironsource-mobile/iOS-sdk GitHub repo
+          curl -L "https://raw.githubusercontent.com/ironsource-mobile/iOS-sdk/master/7.9.0/IronSource7.9.0.zip" \
+               -o IronSource7.9.0.zip
+          mkdir -p ironsource_sdk
+          unzip -o IronSource7.9.0.zip -d ironsource_sdk
+          echo "IronSource SDK contents:"
+          find ironsource_sdk -maxdepth 3 | head -30
+          XCFW=$(find ironsource_sdk -name "IronSource.xcframework" -o -name "IronSource.framework" 2>/dev/null | head -1)
+          echo "Framework: $XCFW"
+          echo "IRONSOURCE_FW=$XCFW" >> "$GITHUB_ENV"
 
       - name: Compile iOS static library
         run: |
@@ -120,7 +87,9 @@ jobs:
           cp ios/libplugin_ironSource.a package_iphone/libplugin_ironSource.a
           cp metadata.lua package_iphone/metadata.lua
           if [ -n "$IRONSOURCE_FW" ] && [ -e "$IRONSOURCE_FW" ]; then
-            cp -r "$IRONSOURCE_FW" "package_iphone/Frameworks/$(basename "$IRONSOURCE_FW")"
+            FNAME=$(basename "$IRONSOURCE_FW")
+            cp -r "$IRONSOURCE_FW" "package_iphone/Frameworks/$FNAME"
+            echo "Included: $FNAME"
           fi
           cd package_iphone && tar czf ../iphone.tgz . && tar tzf ../iphone.tgz
 
