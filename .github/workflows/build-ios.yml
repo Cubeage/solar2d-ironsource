@@ -15,22 +15,21 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 1. Get Corona iOS SDK headers from CoronaCards-iOS zip
-      #    (lighter than 280MB DMG; same headers)
       # -----------------------------------------------------------------------
       - name: Fetch Corona iOS headers
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Try CoronaCards-iOS first (much smaller than DMG)
+          # Get CoronaCards-iOS (not MetalANGLE variant) — much smaller than DMG
           ASSET_URL=$(gh api repos/coronalabs/corona/releases/latest \
-            --jq '.assets[] | select(.name | startswith("CoronaCards-iOS-") and (.name | endswith(".zip")) and (.name | contains("MetalANGLE") | not)) | .browser_download_url')
+            --jq '[.assets[] | select((.name | startswith("CoronaCards-iOS-")) and (.name | endswith(".zip")) and (.name | contains("MetalANGLE") | not))][0] | .browser_download_url')
           echo "Downloading CoronaCards-iOS: $ASSET_URL"
           curl -L "$ASSET_URL" -o CoronaCards-iOS.zip
           unzip -o CoronaCards-iOS.zip -d coronacards_ios
+          echo "CoronaCards-iOS contents:"
+          find coronacards_ios -maxdepth 3 | head -30
           
           mkdir -p corona_ios_sdk/include
-          # Search for Corona headers
-          find coronacards_ios -name "CoronaLua.h" | head -5
           HEADER=$(find coronacards_ios -name "CoronaLua.h" | head -1)
           if [ -n "$HEADER" ]; then
             HEADER_DIR=$(dirname "$HEADER")
@@ -38,10 +37,10 @@ jobs:
             echo "Copied headers from: $HEADER_DIR"
             ls corona_ios_sdk/include/
           else
-            # Fallback: fetch from Solar2D DMG
+            echo "CoronaLua.h not in CoronaCards-iOS zip, falling back to DMG..."
             DMG_URL=$(gh api repos/coronalabs/corona/releases/latest \
               --jq '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url')
-            echo "Falling back to DMG: $DMG_URL"
+            echo "Downloading DMG: $DMG_URL"
             curl -L "$DMG_URL" -o Solar2D.dmg
             hdiutil attach Solar2D.dmg -mountpoint /Volumes/Solar2D -nobrowse -quiet
             HEADER=$(find /Volumes/Solar2D -name "CoronaLua.h" 2>/dev/null | head -1)
@@ -49,64 +48,77 @@ jobs:
               HEADER_DIR=$(dirname "$HEADER")
               cp "$HEADER_DIR"/*.h corona_ios_sdk/include/
               echo "Copied headers from DMG: $HEADER_DIR"
+              ls corona_ios_sdk/include/
+            else
+              echo "ERROR: CoronaLua.h not found"
+              exit 1
             fi
             hdiutil detach /Volumes/Solar2D -quiet
           fi
-          ls -la corona_ios_sdk/include/ || echo "WARNING: No Corona headers found"
 
       # -----------------------------------------------------------------------
       # 2. Install IronSource iOS SDK via CocoaPods
       # -----------------------------------------------------------------------
       - name: Install IronSource iOS SDK via CocoaPods
         run: |
-          # Create a minimal Podfile to pull IronSource SDK
-          mkdir -p /tmp/ironsource_pod
-          cat > /tmp/ironsource_pod/Podfile << 'PODFILE'
-          platform :ios, '12.0'
-          use_frameworks!
-          target 'App' do
-            pod 'IronSourceSDK', '~> 9.2'
-          end
-          PODFILE
+          mkdir -p /tmp/ironsource_pod/App.xcodeproj
           
-          # Create a dummy project for pod install
+          cat > /tmp/ironsource_pod/Podfile << 'PODFILE'
+platform :ios, '12.0'
+use_frameworks!
+target 'App' do
+  pod 'IronSourceSDK', '~> 9.2'
+end
+PODFILE
+
+          # Minimal dummy .xcodeproj
           mkdir -p /tmp/ironsource_pod/App.xcodeproj
           cat > /tmp/ironsource_pod/App.xcodeproj/project.pbxproj << 'PBXEOF'
-          // !$*UTF8*$!
-          {
-            archiveVersion = 1;
-            classes = {};
-            objectVersion = 56;
-            objects = {
-              AB1 = {isa = PBXProject; buildConfigurationList = AB2; compatibilityVersion = "Xcode 14.0"; mainGroup = AB3; targets = (AB4); };
-              AB2 = {isa = XCConfigurationList; buildConfigurations = (AB5,AB6); defaultConfigurationName = Release; };
-              AB3 = {isa = PBXGroup; children = (); };
-              AB4 = {isa = PBXNativeTarget; buildConfigurationList = AB7; buildPhases = (); name = App; productType = "com.apple.product-type.application"; };
-              AB5 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = App; SDKROOT = iphoneos; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
-              AB6 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = App; SDKROOT = iphoneos; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
-              AB7 = {isa = XCConfigurationList; buildConfigurations = (AB5,AB6); defaultConfigurationName = Release; };
-            };
-            rootObject = AB1;
-          }
-          PBXEOF
-          
+// !$*UTF8*$!
+{
+  archiveVersion = 1;
+  classes = {};
+  objectVersion = 56;
+  objects = {
+    A1 = {isa = PBXProject; buildConfigurationList = A2; compatibilityVersion = "Xcode 14.0"; mainGroup = A3; targets = (A4); };
+    A2 = {isa = XCConfigurationList; buildConfigurations = (A5, A6); defaultConfigurationName = Release; };
+    A3 = {isa = PBXGroup; children = (); sourceTree = "<group>"; };
+    A4 = {isa = PBXNativeTarget; buildConfigurationList = A7; buildPhases = (); name = App; productType = "com.apple.product-type.application"; };
+    A5 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = App; SDKROOT = iphoneos; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
+    A6 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = App; SDKROOT = iphoneos; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
+    A7 = {isa = XCConfigurationList; buildConfigurations = (A5, A6); defaultConfigurationName = Release; };
+  };
+  rootObject = A1;
+}
+PBXEOF
+
           cd /tmp/ironsource_pod
-          pod install --repo-update 2>&1 | tail -30 || true
+          pod install --repo-update 2>&1 | tail -20 || true
           
           echo "Searching for IronSource framework..."
           find /tmp/ironsource_pod -name "IronSource*" 2>/dev/null | head -10
           
-          # Copy framework to workspace
+          # Also check CocoaPods cache
+          find ~/Library/Caches/CocoaPods -name "IronSource*" 2>/dev/null | head -5 || true
+          
           XCFW=$(find /tmp/ironsource_pod -name "IronSource.xcframework" 2>/dev/null | head -1)
           FW=$(find /tmp/ironsource_pod -name "IronSource.framework" 2>/dev/null | head -1)
-          FRAMEWORK="${XCFW:-$FW}"
+          # Also check in Pods directory
+          XCFW2=$(find /tmp/ironsource_pod/Pods -name "IronSource.xcframework" 2>/dev/null | head -1)
+          FW2=$(find /tmp/ironsource_pod/Pods -name "IronSource.framework" 2>/dev/null | head -1)
+          FRAMEWORK="${XCFW:-$XCFW2}"
+          FRAMEWORK="${FRAMEWORK:-$FW}"
+          FRAMEWORK="${FRAMEWORK:-$FW2}"
           
           if [ -n "$FRAMEWORK" ]; then
             mkdir -p "$GITHUB_WORKSPACE/ironsource_framework"
             cp -r "$FRAMEWORK" "$GITHUB_WORKSPACE/ironsource_framework/"
             echo "IronSource framework: $FRAMEWORK"
+            echo "IRONSOURCE_FW=$GITHUB_WORKSPACE/ironsource_framework/$(basename $FRAMEWORK)" >> $GITHUB_ENV
           else
-            echo "ERROR: IronSource framework not found via CocoaPods"
+            echo "ERROR: IronSource framework not found"
+            ls -la /tmp/ironsource_pod/ || true
+            ls -la /tmp/ironsource_pod/Pods/ 2>/dev/null || true
             exit 1
           fi
 
@@ -115,19 +127,14 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Compile iOS static library
         run: |
-          IRONSOURCE_XCFW=$(find ironsource_framework -name "IronSource.xcframework" 2>/dev/null | head -1)
-          IRONSOURCE_FW=$(find ironsource_framework -name "IronSource.framework" 2>/dev/null | head -1)
-          FRAMEWORK="${IRONSOURCE_XCFW:-$IRONSOURCE_FW}"
-          FRAMEWORK_DIR=$(dirname "$FRAMEWORK")
-          
+          FRAMEWORK_DIR=$(dirname "$IRONSOURCE_FW")
           CORONA_INCLUDE="$GITHUB_WORKSPACE/corona_ios_sdk/include"
           SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
 
-          echo "Framework: $FRAMEWORK"
+          echo "Framework: $IRONSOURCE_FW"
           echo "Framework dir: $FRAMEWORK_DIR"
           echo "Corona include: $CORONA_INCLUDE"
-          
-          ls "$CORONA_INCLUDE" || echo "WARNING: No Corona headers"
+          ls "$CORONA_INCLUDE" 2>/dev/null || echo "WARNING: No Corona headers"
 
           cd ios
           clang \
@@ -156,13 +163,9 @@ jobs:
           cp ios/libplugin_ironSource.a package_iphone/libplugin_ironSource.a
           cp metadata.lua package_iphone/metadata.lua
 
-          # Include IronSource framework
-          XCFW=$(find ironsource_framework -name "IronSource.xcframework" 2>/dev/null | head -1)
-          FW=$(find ironsource_framework -name "IronSource.framework" 2>/dev/null | head -1)
-          FRAMEWORK="${XCFW:-$FW}"
-          if [ -n "$FRAMEWORK" ]; then
-            FNAME=$(basename "$FRAMEWORK")
-            cp -r "$FRAMEWORK" "package_iphone/Frameworks/$FNAME"
+          if [ -n "$IRONSOURCE_FW" ] && [ -e "$IRONSOURCE_FW" ]; then
+            FNAME=$(basename "$IRONSOURCE_FW")
+            cp -r "$IRONSOURCE_FW" "package_iphone/Frameworks/$FNAME"
             echo "Included: $FNAME"
           fi
 

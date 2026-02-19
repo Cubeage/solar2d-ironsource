@@ -19,8 +19,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # Download CoronaCards-Android zip to extract Corona.jar
-      - name: Fetch Solar2D Corona.jar
+      # CoronaCards-Android.zip contains CoronaCards.aar
+      # We extract classes.jar from inside the AAR (it's a zip file)
+      - name: Fetch Solar2D Corona classes (from CoronaCards AAR)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -28,13 +29,32 @@ jobs:
             --jq '.assets[] | select(.name | startswith("CoronaCards-Android")) | .browser_download_url')
           echo "Downloading: $ASSET_URL"
           curl -L "$ASSET_URL" -o CoronaCards-Android.zip
+          
+          # The zip contains CoronaCards.aar; unzip it
           unzip -o CoronaCards-Android.zip -d coronacards_android
+          echo "Contents of CoronaCards zip:"
+          ls -la coronacards_android/
+          
+          # Find the AAR
+          AAR=$(find coronacards_android -name "*.aar" | head -1)
+          echo "Found AAR: $AAR"
+          
+          # Extract classes.jar from the AAR (an AAR is itself a zip)
+          mkdir -p aar_contents
+          unzip -o "$AAR" -d aar_contents
+          echo "Contents of AAR:"
+          ls -la aar_contents/
+          
+          # Copy classes.jar to android/libs/
           mkdir -p android/libs
-          # Copy all jars found in the zip to android/libs/
-          find coronacards_android -name "*.jar" | while read f; do
-            echo "Found jar: $f"
-            cp "$f" android/libs/
-          done
+          if [ -f aar_contents/classes.jar ]; then
+            cp aar_contents/classes.jar android/libs/Corona.jar
+            echo "Copied classes.jar -> android/libs/Corona.jar"
+          else
+            echo "ERROR: classes.jar not found in AAR"
+            find aar_contents -name "*.jar" | head -10
+            exit 1
+          fi
           ls -la android/libs/
 
       - name: Make gradlew executable
@@ -48,7 +68,7 @@ jobs:
       - name: Locate AAR
         id: aar
         run: |
-          AAR=$(find android -name "*-release.aar" | head -1)
+          AAR=$(find android/build -name "*-release.aar" | head -1)
           echo "aar_path=$AAR" >> $GITHUB_OUTPUT
           echo "Found AAR: $AAR"
 
