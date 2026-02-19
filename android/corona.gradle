@@ -1,8 +1,13 @@
+// corona.gradle — injected by CoronaBuilder into the end-user app's Gradle build.
+// Pulls IronSource SDK at app-build time.
+
 repositories {
+    google()
     mavenCentral()
+    maven { url 'https://android-sdk.is.com/' }
 }
 
 dependencies {
-    implementation 'com.unity3d.ads-mediation:mediation-sdk:8.12.0'
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.0'
+    implementation 'com.ironsource.sdk:mediationsdk:7.9.0'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
 }
