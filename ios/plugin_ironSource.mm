@@ -208,9 +208,9 @@ static int lua_init(lua_State *L) {
 
         // ---- Privacy / consent (must be set BEFORE init in SDK 9.x) ----
         [LevelPlay setConsent:hasConsent];                                  // SDK 9.x consent API
-        [IronSource setMetaDataWithKey:@"is_coppa"    value:coppa ? @"true" : @"false"];
-        [IronSource setMetaDataWithKey:@"do_not_sell" value:ccpa  ? @"true" : @"false"];
-        if (debug) [IronSource setAdaptersDebug:YES];
+        [LevelPlay setMetaDataWithKey:@"is_coppa"    value:coppa ? @"true" : @"false"];
+        [LevelPlay setMetaDataWithKey:@"do_not_sell" value:ccpa  ? @"true" : @"false"];
+        if (debug) [LevelPlay setAdaptersDebug:YES];
 
         // ---- Build LPMInitRequest ----
         LPMInitRequestBuilder *builder =
@@ -295,16 +295,14 @@ static int lua_show(lua_State *L) {
 
         if ([adType isEqualToString:@"interstitial"]) {
             if (sInterstitialAd && [sInterstitialAd isAdReady]) {
-                if (fp.length) [sInterstitialAd showAdWithViewController:vc placementName:fp];
-                else           [sInterstitialAd showAdWithViewController:vc];
+                [sInterstitialAd showAdWithViewController:vc placementName:(fp.length ? fp : nil)];
             } else {
                 DispatchEvent("interstitial", "show", YES, @"not ready");
             }
 
         } else if ([adType isEqualToString:@"rewardedVideo"]) {
             if (sRewardedAd && [sRewardedAd isAdReady]) {
-                if (fp.length) [sRewardedAd showAdWithViewController:vc placementName:fp];
-                else           [sRewardedAd showAdWithViewController:vc];
+                [sRewardedAd showAdWithViewController:vc placementName:(fp.length ? fp : nil)];
             } else {
                 DispatchEvent("rewardedVideo", "show", YES, @"not available");
             }
