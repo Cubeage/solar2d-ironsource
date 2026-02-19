@@ -66,8 +66,9 @@ jobs:
           echo "arm64 framework slice: $ARM64_FW"
           ARM64_DIR=$(dirname "$ARM64_FW")
 
-          echo "IRONSOURCE_XCFW=$XCFW"         >> "$GITHUB_ENV"
-          echo "IRONSOURCE_ARM64_DIR=$ARM64_DIR" >> "$GITHUB_ENV"
+          # Store ABSOLUTE paths so they work after 'cd ios'
+          echo "IRONSOURCE_XCFW=$GITHUB_WORKSPACE/$XCFW"         >> "$GITHUB_ENV"
+          echo "IRONSOURCE_ARM64_DIR=$GITHUB_WORKSPACE/$ARM64_DIR" >> "$GITHUB_ENV"
 
           echo "SDK structure:"; find ironsource_sdk -maxdepth 4 | head -40
 
