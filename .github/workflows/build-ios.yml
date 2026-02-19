@@ -13,73 +13,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch Corona iOS headers
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download IronSource iOS SDK 7.9.0
         run: |
-          ASSET_URL=$(gh api repos/coronalabs/corona/releases/latest \
-            --jq '[.assets[] | select((.name | startswith("CoronaCards-iOS-")) and (.name | endswith(".zip")) and (.name | contains("MetalANGLE") | not))][0] | .browser_download_url')
-          echo "Downloading: $ASSET_URL"
-          curl -L "$ASSET_URL" -o CoronaCards-iOS.zip
-          unzip -q CoronaCards-iOS.zip -d coronacards_ios
-          mkdir -p corona_ios_sdk/include
-          HEADER=$(find coronacards_ios -name "CoronaLua.h" 2>/dev/null | head -1)
-          if [ -n "$HEADER" ]; then
-            echo "Found CoronaLua.h at: $HEADER"
-            cp "$(dirname "$HEADER")"/*.h corona_ios_sdk/include/ 2>/dev/null || true
-            echo "Copied headers:"; ls corona_ios_sdk/include/
-          else
-            echo "CoronaLua.h not in CoronaCards zip, falling back to Solar2D DMG..."
-            DMG_URL=$(gh api repos/coronalabs/corona/releases/latest \
-              --jq '.assets[] | select(.name | endswith(".dmg")) | .browser_download_url')
-            echo "Downloading DMG: $DMG_URL"
-            curl -L "$DMG_URL" -o Solar2D.dmg
-            hdiutil attach Solar2D.dmg -mountpoint /Volumes/Solar2D -nobrowse -quiet
-            HEADER=$(find /Volumes/Solar2D -name "CoronaLua.h" 2>/dev/null | head -1)
-            if [ -n "$HEADER" ]; then
-              cp "$(dirname "$HEADER")"/*.h corona_ios_sdk/include/
-              echo "Copied from DMG:"; ls corona_ios_sdk/include/
-            else
-              echo "ERROR: CoronaLua.h not found in DMG either"; exit 1
-            fi
-            hdiutil detach /Volumes/Solar2D -quiet
-          fi
-
-      - name: Download IronSource iOS SDK 7.9.0 directly
-        run: |
+          # Direct download from ironsource-mobile/iOS-sdk GitHub repo
           curl -L "https://raw.githubusercontent.com/ironsource-mobile/iOS-sdk/master/7.9.0/IronSource7.9.0.zip" \
                -o IronSource7.9.0.zip
           mkdir -p ironsource_sdk
           unzip -q IronSource7.9.0.zip -d ironsource_sdk
 
-          # Find the xcframework path
+          # Find the xcframework
           XCFW=$(find ironsource_sdk -type d -name "IronSource.xcframework" | head -1)
           echo "XCFramework: $XCFW"
 
-          # Find the arm64 (device) framework slice
+          # Find arm64 device slice (exclude simulator)
           ARM64_FW=$(find "$XCFW" -type d -name "IronSource.framework" \
                      -path "*/ios-arm64/*" ! -path "*simulator*" | head -1)
           if [ -z "$ARM64_FW" ]; then
-            # Fall back to any ios-arm64 directory
-            ARM64_FW=$(find "$XCFW" -type d -name "IronSource.framework" | head -1)
+            ARM64_FW=$(find "$XCFW" -type d -name "IronSource.framework" | grep -v simulator | head -1)
           fi
-          echo "arm64 framework slice: $ARM64_FW"
           ARM64_DIR=$(dirname "$ARM64_FW")
+          echo "arm64 framework: $ARM64_FW"
+          echo "arm64 dir: $ARM64_DIR"
 
-          # Store ABSOLUTE paths so they work after 'cd ios'
-          echo "IRONSOURCE_XCFW=$GITHUB_WORKSPACE/$XCFW"         >> "$GITHUB_ENV"
+          # Store absolute paths (compile step does 'cd ios' so relative paths break)
+          echo "IRONSOURCE_XCFW=$GITHUB_WORKSPACE/$XCFW"          >> "$GITHUB_ENV"
           echo "IRONSOURCE_ARM64_DIR=$GITHUB_WORKSPACE/$ARM64_DIR" >> "$GITHUB_ENV"
 
-          echo "SDK structure:"; find ironsource_sdk -maxdepth 4 | head -40
+          echo "SDK structure:"; find ironsource_sdk -maxdepth 4 | head -20
 
       - name: Compile iOS static library
         run: |
-          CORONA_INCLUDE="$GITHUB_WORKSPACE/corona_ios_sdk/include"
+          # Corona SDK headers are committed in ios/corona_sdk/ (sourced from coronalabs/corona repo)
+          CORONA_INCLUDE="$GITHUB_WORKSPACE/ios/corona_sdk"
           SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
 
           echo "IRONSOURCE_ARM64_DIR = $IRONSOURCE_ARM64_DIR"
           echo "CORONA_INCLUDE = $CORONA_INCLUDE"
-          echo "Corona headers:"; ls "$CORONA_INCLUDE" 2>/dev/null || echo "(none - compile may still work for iOS stub)"
+          ls "$CORONA_INCLUDE"
 
           cd ios
           clang \
@@ -91,20 +61,23 @@ jobs:
             -I"$CORONA_INCLUDE" \
             -F"$IRONSOURCE_ARM64_DIR" \
             -DNDEBUG -Os \
+            -Wno-nullability-completeness \
             -c plugin_ironSource.mm \
             -o plugin_ironSource.o
 
           ar rcs libplugin_ironSource.a plugin_ironSource.o
           ranlib libplugin_ironSource.a
           ls -lh libplugin_ironSource.a
+          echo "iOS static library built successfully"
 
       - name: Package iphone.tgz
         run: |
           mkdir -p package_iphone/Frameworks
+
           cp ios/libplugin_ironSource.a package_iphone/libplugin_ironSource.a
           cp metadata.lua package_iphone/metadata.lua
 
-          # Include the full xcframework for the app to link against
+          # Include the full xcframework so the app can link against it
           if [ -n "$IRONSOURCE_XCFW" ] && [ -e "$IRONSOURCE_XCFW" ]; then
             cp -r "$IRONSOURCE_XCFW" package_iphone/Frameworks/
             echo "Included: $(basename $IRONSOURCE_XCFW)"

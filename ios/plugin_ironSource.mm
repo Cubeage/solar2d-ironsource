@@ -1,5 +1,8 @@
 // plugin_ironSource.mm
-// Solar2D iOS plugin bridge for IronSource (Unity LevelPlay) SDK
+// Solar2D iOS plugin bridge for IronSource (Unity LevelPlay) SDK 7.9.0
+// ----------------------------------------------------------------------------
+// NOTE: CoronaLuaRef is typedef void* — use NULL not LUA_NOREF as sentinel
+// NOTE: Solar2D uses Lua 5.1 — luaL_setfuncs is Lua 5.2+, use manual registration
 // ----------------------------------------------------------------------------
 
 #import <Foundation/Foundation.h>
@@ -16,7 +19,7 @@
 
 @interface IronSourcePlugin : NSObject <ISInterstitialDelegate, ISRewardedVideoDelegate>
 @property (nonatomic, assign) lua_State *L;
-@property (nonatomic, assign) CoronaLuaRef listenerRef;
+@property (nonatomic, assign) CoronaLuaRef listenerRef;   // void* — NULL means no listener
 + (instancetype)sharedInstance;
 - (void)dispatchEventType:(NSString *)type phase:(NSString *)phase isError:(BOOL)isError response:(NSString *)response;
 @end
@@ -32,6 +35,7 @@
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         instance = [[IronSourcePlugin alloc] init];
+        instance.listenerRef = NULL;
     });
     return instance;
 }
@@ -39,7 +43,7 @@
 - (void)dispatchEventType:(NSString *)type phase:(NSString *)phase isError:(BOOL)isError response:(NSString *)response {
     dispatch_async(dispatch_get_main_queue(), ^{
         lua_State *L = self.L;
-        if (L == NULL || self.listenerRef == LUA_NOREF) return;
+        if (L == NULL || self.listenerRef == NULL) return;
 
         CoronaLuaNewEvent(L, "ironSource");
 
@@ -130,7 +134,6 @@
 // ----------------------------------------------------------------------------
 
 static int lua_init(lua_State *L) {
-    // arg 1: listener function
     if (!CoronaLuaIsListener(L, 1, "ironSource")) {
         luaL_error(L, "ironSource.init() – first argument must be a listener function");
         return 0;
@@ -139,7 +142,7 @@ static int lua_init(lua_State *L) {
     IronSourcePlugin *plugin = [IronSourcePlugin sharedInstance];
     plugin.L = L;
 
-    if (plugin.listenerRef != LUA_NOREF) {
+    if (plugin.listenerRef != NULL) {
         CoronaLuaDeleteRef(L, plugin.listenerRef);
     }
     plugin.listenerRef = CoronaLuaNewRef(L, 1);
@@ -149,10 +152,8 @@ static int lua_init(lua_State *L) {
         return 0;
     }
 
-    // Read appKey
     lua_getfield(L, 2, "key");
-    NSString *appKey = nil;
-    if (lua_isstring(L, -1)) appKey = @(lua_tostring(L, -1));
+    NSString *appKey = lua_isstring(L, -1) ? @(lua_tostring(L, -1)) : nil;
     lua_pop(L, 1);
 
     if (appKey == nil || appKey.length == 0) {
@@ -160,7 +161,6 @@ static int lua_init(lua_State *L) {
         return 0;
     }
 
-    // Optional fields
     lua_getfield(L, 2, "userId");
     NSString *userId = lua_isstring(L, -1) ? @(lua_tostring(L, -1)) : nil;
     lua_pop(L, 1);
@@ -185,29 +185,32 @@ static int lua_init(lua_State *L) {
     NSString *attStatus = lua_isstring(L, -1) ? @(lua_tostring(L, -1)) : nil;
     lua_pop(L, 1);
 
+    // Capture locals for dispatch block
+    NSString *appKeyC       = [appKey copy];
+    NSString *userIdC       = [userId copy];
+    NSString *attStatusC    = [attStatus copy];
+    IronSourcePlugin *plug  = plugin;
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (debug) {
-            [IronSource setAdaptersDebug:YES];
-        }
+        if (debug) [IronSource setAdaptersDebug:YES];
 
         [IronSource setConsent:hasConsent];
-        [IronSource setMetaDataWithKey:@"is_coppa" value:coppa ? @"true" : @"false"];
-        [IronSource setMetaDataWithKey:@"do_not_sell" value:ccpa ? @"true" : @"false"];
+        [IronSource setMetaDataWithKey:@"is_coppa"     value:coppa ? @"true" : @"false"];
+        [IronSource setMetaDataWithKey:@"do_not_sell"  value:ccpa  ? @"true" : @"false"];
 
-        if (attStatus && [attStatus isEqualToString:@"authorized"]) {
+        if (attStatusC.length > 0 && [attStatusC isEqualToString:@"authorized"]) {
             [IronSource setMetaDataWithKey:@"ATTStatus" value:@"1"];
         }
-
-        if (userId && userId.length > 0) {
-            [IronSource setUserId:userId];
+        if (userIdC.length > 0) {
+            [IronSource setUserId:userIdC];
         }
 
-        [IronSource setInterstitialDelegate:plugin];
-        [IronSource setRewardedVideoDelegate:plugin];
+        [IronSource setInterstitialDelegate:plug];
+        [IronSource setRewardedVideoDelegate:plug];
 
-        [IronSource initWithAppKey:appKey adUnits:@[IS_AD_UNIT_INTERSTITIAL, IS_AD_UNIT_REWARDED_VIDEO]];
+        [IronSource initWithAppKey:appKeyC
+                          adUnits:@[IS_AD_UNIT_INTERSTITIAL, IS_AD_UNIT_REWARDED_VIDEO]];
     });
-
     return 0;
 }
 
@@ -217,12 +220,11 @@ static int lua_load(lua_State *L) {
         return 0;
     }
     NSString *adUnitType = @(lua_tostring(L, 1));
-
     dispatch_async(dispatch_get_main_queue(), ^{
         if ([adUnitType isEqualToString:@"interstitial"]) {
             [IronSource loadInterstitial];
         }
-        // rewardedVideo is auto-loaded by IronSource SDK
+        // rewardedVideo is auto-loaded by IronSource SDK after init
     });
     return 0;
 }
@@ -246,23 +248,19 @@ static int lua_show(lua_State *L) {
         UIViewController *vc = [UIApplication sharedApplication].keyWindow.rootViewController;
         if ([adUnitType isEqualToString:@"interstitial"]) {
             if ([IronSource isInterstitialReady]) {
-                if (finalPlacement.length > 0) {
-                    [IronSource showInterstitialWithViewController:vc placement:finalPlacement];
-                } else {
-                    [IronSource showInterstitialWithViewController:vc placement:nil];
-                }
+                [IronSource showInterstitialWithViewController:vc
+                                                    placement:finalPlacement.length > 0 ? finalPlacement : nil];
             } else {
-                [[IronSourcePlugin sharedInstance] dispatchEventType:@"interstitial" phase:@"show" isError:YES response:@"not ready"];
+                [[IronSourcePlugin sharedInstance] dispatchEventType:@"interstitial"
+                    phase:@"show" isError:YES response:@"not ready"];
             }
         } else if ([adUnitType isEqualToString:@"rewardedVideo"]) {
             if ([IronSource hasRewardedVideo]) {
-                if (finalPlacement.length > 0) {
-                    [IronSource showRewardedVideoWithViewController:vc placement:finalPlacement];
-                } else {
-                    [IronSource showRewardedVideoWithViewController:vc placement:nil];
-                }
+                [IronSource showRewardedVideoWithViewController:vc
+                                                     placement:finalPlacement.length > 0 ? finalPlacement : nil];
             } else {
-                [[IronSourcePlugin sharedInstance] dispatchEventType:@"rewardedVideo" phase:@"show" isError:YES response:@"not available"];
+                [[IronSourcePlugin sharedInstance] dispatchEventType:@"rewardedVideo"
+                    phase:@"show" isError:YES response:@"not available"];
             }
         }
     });
@@ -270,10 +268,7 @@ static int lua_show(lua_State *L) {
 }
 
 static int lua_isAvailable(lua_State *L) {
-    if (!lua_isstring(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
+    if (!lua_isstring(L, 1)) { lua_pushboolean(L, 0); return 1; }
     NSString *adUnitType = @(lua_tostring(L, 1));
     BOOL available = NO;
     if ([adUnitType isEqualToString:@"interstitial"]) {
@@ -289,24 +284,27 @@ static int lua_isAvailable(lua_State *L) {
 #pragma mark - Plugin entry point
 // ----------------------------------------------------------------------------
 
-static const luaL_Reg kFunctions[] = {
-    { "init",        lua_init        },
-    { "load",        lua_load        },
-    { "show",        lua_show        },
-    { "isAvailable", lua_isAvailable },
-    { NULL, NULL }
-};
-
 CORONA_EXPORT
 int luaopen_plugin_ironSource(lua_State *L) {
-    // Initialise the plugin singleton
+    // Initialise singleton
     IronSourcePlugin *plugin = [IronSourcePlugin sharedInstance];
-    plugin.L            = L;
-    plugin.listenerRef  = LUA_NOREF;
+    plugin.L           = L;
+    plugin.listenerRef = NULL;   // CoronaLuaRef is void* — use NULL not LUA_NOREF
 
-    // Create and return the Lua library table
+    // Create and return a Lua table (Lua 5.1 compatible manual registration)
     lua_newtable(L);
-    luaL_setfuncs(L, kFunctions, 0);
+
+    lua_pushcfunction(L, lua_init);
+    lua_setfield(L, -2, "init");
+
+    lua_pushcfunction(L, lua_load);
+    lua_setfield(L, -2, "load");
+
+    lua_pushcfunction(L, lua_show);
+    lua_setfield(L, -2, "show");
+
+    lua_pushcfunction(L, lua_isAvailable);
+    lua_setfield(L, -2, "isAvailable");
 
     return 1;
 }
