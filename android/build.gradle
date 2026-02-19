@@ -22,10 +22,6 @@ android {
     }
 }
 
-repositories {
-    mavenCentral()
-}
-
 dependencies {
     // IronSource (Unity LevelPlay) SDK 9.2.0 — Maven Central
     implementation 'com.unity3d.ads-mediation:mediation-sdk:9.2.0'
