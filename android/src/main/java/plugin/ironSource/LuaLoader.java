@@ -214,7 +214,12 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                             IronSource.setAdaptersDebug(true);
                         }
 
-                        IronSource.setConsent(hasConsent);
+                        // SDK 9.x: setConsent(boolean) was removed.
+                        // Use MetaData API for GDPR/CCPA consent.
+                        IronSource.setMetaData("is_child_directed", "false");
+                        if (hasConsent) {
+                            IronSource.setMetaData("consent_status", "true");
+                        }
                         IronSource.setMetaData("is_coppa", coppa ? "true" : "false");
                         IronSource.setMetaData("do_not_sell", ccpa ? "true" : "false");
 
