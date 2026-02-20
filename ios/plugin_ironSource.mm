@@ -24,6 +24,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <IronSource/IronSource.h>   // includes LPM* headers in SDK 9.x
+#include <dlfcn.h>
 
 #import "CoronaRuntime.h"
 #import "CoronaLua.h"
@@ -331,6 +332,29 @@ static int lua_isAvailable(lua_State *L) {
 
 CORONA_EXPORT
 int luaopen_plugin_ironSource(lua_State *L) {
+    // IronSource.framework is embedded in IPA/Frameworks/ but is NOT in LC_LOAD_DYLIB
+    // (CoronaBuilder uses -undefined dynamic_lookup and never adds -framework IronSource).
+    // We must dlopen it explicitly so the ObjC runtime can find LevelPlay, LPMInterstitialAd, etc.
+    {
+        NSString *fwPath = [[[NSBundle mainBundle] privateFrameworksPath]
+                            stringByAppendingPathComponent:@"IronSource.framework/IronSource"];
+        void *handle = dlopen([fwPath UTF8String], RTLD_LAZY | RTLD_GLOBAL);
+        if (!handle) {
+            NSLog(@"[IronSourcePlugin] WARNING: dlopen IronSource.framework failed: %s", dlerror());
+            // Try alternate path
+            NSString *alt = [[[NSBundle mainBundle] bundlePath]
+                             stringByAppendingPathComponent:@"Frameworks/IronSource.framework/IronSource"];
+            handle = dlopen([alt UTF8String], RTLD_LAZY | RTLD_GLOBAL);
+            if (!handle) {
+                NSLog(@"[IronSourcePlugin] ERROR: IronSource.framework not found at either path");
+            } else {
+                NSLog(@"[IronSourcePlugin] IronSource.framework loaded from alt path");
+            }
+        } else {
+            NSLog(@"[IronSourcePlugin] IronSource.framework loaded successfully");
+        }
+    }
+
     sL           = L;
     sListenerRef = NULL;   // CoronaLuaRef = void* — NULL means no listener
 
