@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout
@@ -16,47 +16,43 @@ jobs:
 
       - name: Download IronSource iOS SDK 9.3.0
         run: |
-          # Direct download from ironsource-mobile/iOS-sdk GitHub repo
           curl -L "https://raw.githubusercontent.com/ironsource-mobile/iOS-sdk/master/9.3.0/IronSource9.3.0.zip" \
                -o IronSource9.3.0.zip
           mkdir -p ironsource_sdk
           unzip -q IronSource9.3.0.zip -d ironsource_sdk
 
-          # Find the xcframework
           XCFW=$(find ironsource_sdk -type d -name "IronSource.xcframework" | head -1)
           echo "XCFramework: $XCFW"
 
-          # Find arm64 device slice (exclude simulator)
+          # Find arm64 device slice (exclude simulator slices)
           ARM64_FW=$(find "$XCFW" -type d -name "IronSource.framework" \
                      -path "*/ios-arm64/*" ! -path "*simulator*" | head -1)
           if [ -z "$ARM64_FW" ]; then
-            ARM64_FW=$(find "$XCFW" -type d -name "IronSource.framework" | grep -v simulator | head -1)
+            ARM64_FW=$(find "$XCFW" -type d -name "IronSource.framework" \
+                       ! -path "*simulator*" | head -1)
           fi
-          ARM64_DIR=$(dirname "$ARM64_FW")
           echo "arm64 framework: $ARM64_FW"
-          echo "arm64 dir: $ARM64_DIR"
+          ARM64_DIR=$(dirname "$ARM64_FW")
 
-          # Store absolute paths (compile step does 'cd ios' so relative paths break)
-          echo "IRONSOURCE_XCFW=$GITHUB_WORKSPACE/$XCFW"          >> "$GITHUB_ENV"
           echo "IRONSOURCE_ARM64_DIR=$GITHUB_WORKSPACE/$ARM64_DIR" >> "$GITHUB_ENV"
+          echo "IRONSOURCE_ARM64_FW=$GITHUB_WORKSPACE/$ARM64_FW"   >> "$GITHUB_ENV"
 
-          echo "SDK structure:"; find ironsource_sdk -maxdepth 4 | head -20
+          echo "SDK structure:"; find ironsource_sdk -maxdepth 5 | head -30
 
       - name: Compile iOS static library
         run: |
-          # Corona SDK headers are committed in ios/corona_sdk/ (sourced from coronalabs/corona repo)
           CORONA_INCLUDE="$GITHUB_WORKSPACE/ios/corona_sdk"
           SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
 
           echo "IRONSOURCE_ARM64_DIR = $IRONSOURCE_ARM64_DIR"
-          echo "CORONA_INCLUDE = $CORONA_INCLUDE"
+          echo "CORONA_INCLUDE       = $CORONA_INCLUDE"
           ls "$CORONA_INCLUDE"
 
           cd ios
           clang \
             -arch arm64 \
             -isysroot "$SDKROOT" \
-            -miphoneos-version-min=12.0 \
+            -miphoneos-version-min=13.0 \
             -fobjc-arc \
             -std=c++17 \
             -I"$CORONA_INCLUDE" \
@@ -73,20 +69,29 @@ jobs:
 
       - name: Package iphone.tgz
         run: |
-          mkdir -p package_iphone/Frameworks
+          mkdir -p package_iphone
 
+          # Static library + metadata
           cp ios/libplugin_ironSource.a package_iphone/libplugin_ironSource.a
-          cp metadata.lua package_iphone/metadata.lua
+          cp metadata.lua              package_iphone/metadata.lua
 
-          # Include the full xcframework so the app can link against it
-          if [ -n "$IRONSOURCE_XCFW" ] && [ -e "$IRONSOURCE_XCFW" ]; then
-            cp -r "$IRONSOURCE_XCFW" package_iphone/Frameworks/
-            echo "Included: $(basename $IRONSOURCE_XCFW)"
+          # Include IronSource.framework (arm64 device slice, flat .framework)
+          # at ROOT of iphone.tgz so CoronaBuilder can:
+          #   1. Find it via -F".../plugin.ironSource" framework search path
+          #   2. Link it via -framework IronSource (declared in metadata.lua)
+          #   3. Embed it in the final IPA's Frameworks/ directory
+          if [ -n "$IRONSOURCE_ARM64_FW" ] && [ -d "$IRONSOURCE_ARM64_FW" ]; then
+            cp -r "$IRONSOURCE_ARM64_FW" package_iphone/IronSource.framework
+            echo "Included IronSource.framework (arm64 device slice)"
+            ls -la package_iphone/IronSource.framework/
+          else
+            echo "ERROR: IronSource.framework not found!" && exit 1
           fi
 
           cd package_iphone
           tar czf ../iphone.tgz .
-          echo "iphone.tgz contents:"; tar tzf ../iphone.tgz | head -20
+          echo "iphone.tgz contents:"
+          tar tzf ../iphone.tgz
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
