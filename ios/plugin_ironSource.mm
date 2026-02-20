@@ -34,6 +34,17 @@
 #include <objc/runtime.h>
 #include <objc/message.h>
 
+// Import IronSource headers for method signature / selector declarations ONLY.
+// This does NOT generate ObjC class refs as long as we avoid literal [ClassName ...]
+// syntax for class-level calls. Instance method calls ([instance method]) are safe
+// because they use the object's isa pointer, not the static class ref slot.
+// The -F flag points the compiler to the SDK; the framework is NOT linked into the
+// binary here — dlopen() handles runtime loading.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Weverything"
+#import <IronSource/IronSource.h>
+#pragma clang diagnostic pop
+
 #import "CoronaRuntime.h"
 #import "CoronaLua.h"
 #import "CoronaLibrary.h"
@@ -59,13 +70,13 @@ static id sInterstitialAd = nil;   // LPMInterstitialAd* (id to avoid compile-ti
 static id sRewardedAd     = nil;   // LPMRewardedAd*
 
 // ---------------------------------------------------------------------------
-// objc_msgSend helper typedefs
+// objc_msgSend helper typedefs (self + SEL + explicit args)
 // ---------------------------------------------------------------------------
-typedef void (*VoidBoolIMP)(id, SEL, BOOL);
-typedef void (*VoidIdIdIMP)(id, SEL, id, id);
-typedef void (*VoidIdIdIdIMP)(id, SEL, id, id, id);
-typedef id   (*IdIdIMP)(id, SEL, id);
-typedef id   (*AllocIMP)(id, SEL);
+typedef void (*VoidBoolIMP)(id, SEL, BOOL);       // (self, SEL, BOOL)
+typedef void (*VoidIdIMP)(id, SEL, id);            // (self, SEL, id) — 1 object arg
+typedef void (*VoidIdIdIMP)(id, SEL, id, id);      // (self, SEL, id, id) — 2 object args
+typedef id   (*IdIdIMP)(id, SEL, id);              // (self, SEL, id) → id
+typedef id   (*AllocIMP)(id, SEL);                 // (self, SEL) → id
 
 // ---------------------------------------------------------------------------
 // Event dispatch helper
@@ -282,8 +293,7 @@ static int lua_init(lua_State *L) {
                 id ad = ((AllocIMP)objc_msgSend)((id)kLPMInterstitialAd, @selector(alloc));
                 ad = ((IdIdIMP)objc_msgSend)(ad, @selector(initWithAdUnitId:), intId);
                 sInterstitialAd = ad;
-                ((VoidIdIdIMP)objc_msgSend)(sInterstitialAd,
-                                            @selector(setDelegate:), sInterstitialDelegate);
+                ((VoidIdIMP)objc_msgSend)(sInterstitialAd, @selector(setDelegate:), sInterstitialDelegate);
                 [sInterstitialAd loadAd];
             }
 
@@ -294,8 +304,7 @@ static int lua_init(lua_State *L) {
                 id ad = ((AllocIMP)objc_msgSend)((id)kLPMRewardedAd, @selector(alloc));
                 ad = ((IdIdIMP)objc_msgSend)(ad, @selector(initWithAdUnitId:), rvId);
                 sRewardedAd = ad;
-                ((VoidIdIdIMP)objc_msgSend)(sRewardedAd,
-                                            @selector(setDelegate:), sRewardedDelegate);
+                ((VoidIdIMP)objc_msgSend)(sRewardedAd, @selector(setDelegate:), sRewardedDelegate);
                 [sRewardedAd loadAd];
             }
         };
