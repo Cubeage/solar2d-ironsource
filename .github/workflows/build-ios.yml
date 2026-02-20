@@ -49,6 +49,9 @@ jobs:
           ls "$CORONA_INCLUDE"
 
           cd ios
+          # v9.3.4: plugin no longer imports IronSource headers at compile time.
+          # All IronSource access is via objc_getClass()/objc_msgSend() at runtime.
+          # Removed -F flag — no IronSource SDK headers needed during compilation.
           clang \
             -arch arm64 \
             -isysroot "$SDKROOT" \
@@ -56,9 +59,9 @@ jobs:
             -fobjc-arc \
             -std=c++17 \
             -I"$CORONA_INCLUDE" \
-            -F"$IRONSOURCE_ARM64_DIR" \
             -DNDEBUG -Os \
             -Wno-nullability-completeness \
+            -Wno-arc-performSelector-leaks \
             -c plugin_ironSource.mm \
             -o plugin_ironSource.o
 
