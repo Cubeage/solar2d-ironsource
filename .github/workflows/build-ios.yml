@@ -37,6 +37,8 @@ jobs:
           echo "IRONSOURCE_ARM64_DIR=$GITHUB_WORKSPACE/$ARM64_DIR" >> "$GITHUB_ENV"
           echo "IRONSOURCE_ARM64_FW=$GITHUB_WORKSPACE/$ARM64_FW"   >> "$GITHUB_ENV"
 
+          # Verify the binary is a static library
+          file "$ARM64_FW/IronSource"
           echo "SDK structure:"; find ironsource_sdk -maxdepth 5 | head -30
 
       - name: Compile iOS static library
@@ -45,12 +47,14 @@ jobs:
           SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
 
           echo "IRONSOURCE_ARM64_DIR = $IRONSOURCE_ARM64_DIR"
+          echo "IRONSOURCE_ARM64_FW  = $IRONSOURCE_ARM64_FW"
           echo "CORONA_INCLUDE       = $CORONA_INCLUDE"
           ls "$CORONA_INCLUDE"
 
           cd ios
-          # v9.3.4: Import IronSource headers for method signatures only (no class refs).
-          # CLASS-level calls use objc_getClass()+objc_msgSend; INSTANCE calls are direct.
+          # Compile plugin source — IronSource headers are imported normally.
+          # The framework binary is a static library (ar archive) and will be
+          # merged into libplugin_ironSource.a below. No dlopen needed.
           clang \
             -arch arm64 \
             -isysroot "$SDKROOT" \
@@ -65,8 +69,23 @@ jobs:
             -c plugin_ironSource.mm \
             -o plugin_ironSource.o
 
-          ar rcs libplugin_ironSource.a plugin_ironSource.o
-          ranlib libplugin_ironSource.a
+          # Build plugin object into a thin static lib first
+          ar rcs libplugin_ironSource_plugin.a plugin_ironSource.o
+          ranlib libplugin_ironSource_plugin.a
+
+          # Merge plugin + IronSource static library into one combined .a
+          # This embeds all IronSource symbols directly in libplugin_ironSource.a
+          # so CoronaBuilder links them into the app binary without any framework embed.
+          IRONSOURCE_LIB="$IRONSOURCE_ARM64_FW/IronSource"
+          echo "Merging IronSource static lib: $IRONSOURCE_LIB"
+          file "$IRONSOURCE_LIB"
+
+          libtool -static \
+            libplugin_ironSource_plugin.a \
+            "$IRONSOURCE_LIB" \
+            -o libplugin_ironSource.a
+
+          echo "Merged static library:"
           ls -lh libplugin_ironSource.a
           echo "iOS static library built successfully"
 
@@ -74,27 +93,15 @@ jobs:
         run: |
           mkdir -p package_iphone
 
-          # Static library + metadata
+          # Only the merged static library + metadata are needed.
+          # IronSource is now statically linked — no dynamic framework to embed.
           cp ios/libplugin_ironSource.a package_iphone/libplugin_ironSource.a
           cp metadata.lua              package_iphone/metadata.lua
-
-          # Include IronSource.framework (arm64 device slice, flat .framework)
-          # at ROOT of iphone.tgz so CoronaBuilder can:
-          #   1. Find it via -F".../plugin.ironSource" framework search path
-          #   2. Link it via -framework IronSource (declared in metadata.lua)
-          #   3. Embed it in the final IPA's Frameworks/ directory
-          if [ -n "$IRONSOURCE_ARM64_FW" ] && [ -d "$IRONSOURCE_ARM64_FW" ]; then
-            cp -r "$IRONSOURCE_ARM64_FW" package_iphone/IronSource.framework
-            echo "Included IronSource.framework (arm64 device slice)"
-            ls -la package_iphone/IronSource.framework/
-          else
-            echo "ERROR: IronSource.framework not found!" && exit 1
-          fi
 
           cd package_iphone
           tar czf ../iphone.tgz .
           echo "iphone.tgz contents:"
-          tar tzf ../iphone.tgz
+          tar tzf ../iphone.tgz | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

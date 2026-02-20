@@ -1,26 +1,27 @@
 // plugin_ironSource.mm
 // Solar2D iOS plugin bridge for IronSource (Unity LevelPlay) SDK 9.x
 // ----------------------------------------------------------------------------
-// v9.3.4 — Root-cause fix for "black screen" on iOS:
+// v9.3.5 — Definitive static-linking fix:
 //
-// PROBLEM: CoronaBuilder links with -undefined dynamic_lookup. All ObjC class
-// refs compiled into libplugin_ironSource.a (LevelPlay, LPMInterstitialAd, etc.)
-// become BIND-AT-LOAD symbols. At dyld load time — BEFORE main() — these refs
-// are bound to NULL because IronSource.framework is not in LC_LOAD_DYLIB.
-// dlopen() in luaopen_ loads the framework, but the already-bound NULL slots in
-// __DATA.__objc_classrefs are NOT updated by dyld after the fact.
-// Result: [LevelPlay initWithRequest:...] = objc_msgSend(NULL, ...) = no-op.
-// Init callback never fires. Ads never load. Black screen if game waits for init.
+// ROOT CAUSE (all v9.3.1–v9.3.4 failures):
+//   IronSource.framework/IronSource is a STATIC LIBRARY (ar archive), not a
+//   dynamic Mach-O dylib. You cannot dlopen() a static library. All previous
+//   dlopen() attempts silently returned NULL, gSDKLoaded = NO, and init()
+//   dispatched "failed" immediately — causing the black screen.
 //
-// FIX: Do NOT import IronSource headers at compile time. Do NOT write [ClassName ...]
-// with literal class names. After dlopen(), use objc_getClass() to get live class
-// pointers, then use objc_msgSend() / performSelector: for all calls. These go
-// through the ObjC runtime (NOT the pre-bound classref slots) and work correctly.
+// FIX:
+//   The CI build uses `libtool -static` to merge IronSource's static library
+//   into libplugin_ironSource.a. All symbols are linked directly into the app
+//   binary at CoronaBuilder time. No dynamic loading needed.
+//   metadata.lua no longer declares `frameworks = {"IronSource"}` (there is no
+//   dynamic framework to embed).
 //
 // Lua API (unchanged):
-//   ironSource.init(listener, options)   -- options: key, userId, interstitialAdUnitId,
-//                                        --   rewardedVideoAdUnitId, hasUserConsent,
-//                                        --   coppaUnderAge, ccpaDoNotSell, showDebugLog
+//   ironSource.init(listener, options)   -- options: key, userId,
+//                                        --   interstitialAdUnitId,
+//                                        --   rewardedVideoAdUnitId,
+//                                        --   hasUserConsent, coppaUnderAge,
+//                                        --   ccpaDoNotSell, showDebugLog
 //   ironSource.load(adType)             -- "interstitial" | "rewardedVideo"
 //   ironSource.show(adType [, opts])    -- opts: placementName
 //   ironSource.isAvailable(adType)      -- returns boolean
@@ -30,16 +31,9 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#include <dlfcn.h>
-#include <objc/runtime.h>
-#include <objc/message.h>
 
-// Import IronSource headers for method signature / selector declarations ONLY.
-// This does NOT generate ObjC class refs as long as we avoid literal [ClassName ...]
-// syntax for class-level calls. Instance method calls ([instance method]) are safe
-// because they use the object's isa pointer, not the static class ref slot.
-// The -F flag points the compiler to the SDK; the framework is NOT linked into the
-// binary here — dlopen() handles runtime loading.
+// IronSource is statically merged into libplugin_ironSource.a at build time.
+// Import headers normally — class refs are resolved at link time.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"
 #import <IronSource/IronSource.h>
@@ -50,33 +44,13 @@
 #import "CoronaLibrary.h"
 
 // ---------------------------------------------------------------------------
-// Runtime class pointers — populated in luaopen_ AFTER dlopen()
-// Use these instead of compile-time class refs (which are NULL at launch)
-// ---------------------------------------------------------------------------
-static Class kLevelPlay              = Nil;
-static Class kLPMInterstitialAd      = Nil;
-static Class kLPMRewardedAd          = Nil;
-static Class kLPMInitRequestBuilder  = Nil;
-
-static BOOL gSDKLoaded = NO;   // set YES when dlopen + objc_getClass succeed
-
-// ---------------------------------------------------------------------------
 // Shared plugin globals
 // ---------------------------------------------------------------------------
 static lua_State    *sL           = NULL;
 static CoronaLuaRef  sListenerRef = NULL;
 
-static id sInterstitialAd = nil;   // LPMInterstitialAd* (id to avoid compile-time classref)
-static id sRewardedAd     = nil;   // LPMRewardedAd*
-
-// ---------------------------------------------------------------------------
-// objc_msgSend helper typedefs (self + SEL + explicit args)
-// ---------------------------------------------------------------------------
-typedef void (*VoidBoolIMP)(id, SEL, BOOL);       // (self, SEL, BOOL)
-typedef void (*VoidIdIMP)(id, SEL, id);            // (self, SEL, id) — 1 object arg
-typedef void (*VoidIdIdIMP)(id, SEL, id, id);      // (self, SEL, id, id) — 2 object args
-typedef id   (*IdIdIMP)(id, SEL, id);              // (self, SEL, id) → id
-typedef id   (*AllocIMP)(id, SEL);                 // (self, SEL) → id
+static LPMInterstitialAd *sInterstitialAd = nil;
+static LPMRewardedAd     *sRewardedAd     = nil;
 
 // ---------------------------------------------------------------------------
 // Event dispatch helper
@@ -97,7 +71,7 @@ static void DispatchEvent(const char *type, const char *phase, BOOL isError, NSS
 }
 
 // ---------------------------------------------------------------------------
-// Helper: topmost view controller (iOS 13+ scene API + legacy fallback)
+// Helper: topmost view controller
 // ---------------------------------------------------------------------------
 static UIViewController *TopViewController(void) {
     UIWindow *window = nil;
@@ -124,30 +98,28 @@ static UIViewController *TopViewController(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Interstitial delegate — informal protocol (no compile-time IronSource refs)
-// Selectors match LPMInterstitialAdDelegate. IronSource calls via
-// respondsToSelector: + objc_msgSend, so formal protocol conformance is optional.
+// Interstitial delegate
 // ---------------------------------------------------------------------------
-@interface ISPluginInterstitialDelegate : NSObject
+@interface ISPluginInterstitialDelegate : NSObject <LPMInterstitialAdDelegate>
 @end
 @implementation ISPluginInterstitialDelegate
 
-- (void)didLoadAdWithAdInfo:(id)adInfo {
+- (void)didLoadAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("interstitial", "loaded", NO, nil);
 }
 - (void)didFailToLoadAdWithAdUnitId:(NSString *)adUnitId error:(NSError *)error {
     DispatchEvent("interstitial", "show", YES,
                   error ? [error localizedDescription] : @"load failed");
 }
-- (void)didDisplayAdWithAdInfo:(id)adInfo {
+- (void)didDisplayAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("interstitial", "show", NO, nil);
 }
-- (void)didFailToDisplayAdWithAdInfo:(id)adInfo error:(NSError *)error {
+- (void)didFailToDisplayAdWithAdInfo:(LPMAdInfo *)adInfo error:(NSError *)error {
     DispatchEvent("interstitial", "show", YES,
                   error ? [error localizedDescription] : @"show failed");
 }
-- (void)didClickAdWithAdInfo:(id)adInfo {}
-- (void)didCloseAdWithAdInfo:(id)adInfo {
+- (void)didClickAdWithAdInfo:(LPMAdInfo *)adInfo {}
+- (void)didCloseAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("interstitial", "closed", NO, nil);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (sInterstitialAd) [sInterstitialAd loadAd];
@@ -156,42 +128,38 @@ static UIViewController *TopViewController(void) {
 @end
 
 // ---------------------------------------------------------------------------
-// Rewarded delegate — informal protocol
+// Rewarded delegate
 // ---------------------------------------------------------------------------
-@interface ISPluginRewardedDelegate : NSObject
+@interface ISPluginRewardedDelegate : NSObject <LPMRewardedAdDelegate>
 @end
 @implementation ISPluginRewardedDelegate
 
-- (void)didLoadAdWithAdInfo:(id)adInfo {
+- (void)didLoadAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("rewardedVideo", "available", NO, nil);
 }
 - (void)didFailToLoadAdWithAdUnitId:(NSString *)adUnitId error:(NSError *)error {
     DispatchEvent("rewardedVideo", "show", YES,
                   error ? [error localizedDescription] : @"load failed");
 }
-- (void)didDisplayAdWithAdInfo:(id)adInfo {
+- (void)didDisplayAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("rewardedVideo", "show", NO, nil);
 }
-- (void)didFailToDisplayAdWithAdInfo:(id)adInfo error:(NSError *)error {
+- (void)didFailToDisplayAdWithAdInfo:(LPMAdInfo *)adInfo error:(NSError *)error {
     DispatchEvent("rewardedVideo", "show", YES,
                   error ? [error localizedDescription] : @"show failed");
 }
-- (void)didClickAdWithAdInfo:(id)adInfo {}
-- (void)didCloseAdWithAdInfo:(id)adInfo {
+- (void)didClickAdWithAdInfo:(LPMAdInfo *)adInfo {}
+- (void)didCloseAdWithAdInfo:(LPMAdInfo *)adInfo {
     DispatchEvent("rewardedVideo", "closed", NO, nil);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (sRewardedAd) [sRewardedAd loadAd];
     });
 }
-- (void)didRewardAdWithAdInfo:(id)adInfo reward:(id)reward {
-    NSString *name = nil;
-    @try {
-        name = [reward valueForKey:@"name"];
-        if (!name.length) name = [adInfo valueForKey:@"placementName"];
-    } @catch (...) {}
+- (void)didRewardAdWithAdInfo:(LPMAdInfo *)adInfo reward:(LPMReward *)reward {
+    NSString *name = reward.name.length ? reward.name : adInfo.placementName;
     DispatchEvent("rewardedVideo", "reward", NO, name);
 }
-- (void)didChangeAdInfo:(id)adInfo {}
+- (void)didChangeAdInfo:(LPMAdInfo *)adInfo {}
 @end
 
 static ISPluginInterstitialDelegate *sInterstitialDelegate = nil;
@@ -215,57 +183,40 @@ static int lua_init(lua_State *L) {
 #define GSTR(f)  ({ lua_getfield(L,2,f); NSString *_v=lua_isstring(L,-1)?@(lua_tostring(L,-1)):nil; lua_pop(L,1); _v; })
 #define GBOOL(f) ({ lua_getfield(L,2,f); BOOL _v=lua_isboolean(L,-1)&&(BOOL)lua_toboolean(L,-1); lua_pop(L,1); _v; })
 
-    NSString *appKey    = GSTR("key");
-    NSString *userId    = GSTR("userId");
-    NSString *intId     = GSTR("interstitialAdUnitId");
-    NSString *rvId      = GSTR("rewardedVideoAdUnitId");
-    BOOL consent        = GBOOL("hasUserConsent");
-    BOOL coppa          = GBOOL("coppaUnderAge");
-    BOOL ccpa           = GBOOL("ccpaDoNotSell");
-    BOOL debug          = GBOOL("showDebugLog");
+    NSString *appKey = GSTR("key");
+    NSString *userId = GSTR("userId");
+    NSString *intId  = GSTR("interstitialAdUnitId");
+    NSString *rvId   = GSTR("rewardedVideoAdUnitId");
+    BOOL consent     = GBOOL("hasUserConsent");
+    BOOL coppa       = GBOOL("coppaUnderAge");
+    BOOL ccpa        = GBOOL("ccpaDoNotSell");
+    BOOL debug       = GBOOL("showDebugLog");
 
 #undef GSTR
 #undef GBOOL
 
     if (!appKey.length) { luaL_error(L, "ironSource.init: options.key required"); return 0; }
 
-    if (!gSDKLoaded) {
-        NSLog(@"[IronSourcePlugin] init() skipped — SDK not loaded (dlopen failed)");
-        DispatchEvent("init", "failed", YES, @"IronSource.framework not loaded");
-        return 0;
-    }
-
-    // Capture copies for async block
     appKey = [appKey copy]; userId = [userId copy];
     intId  = [intId copy];  rvId   = [rvId copy];
 
     dispatch_async(dispatch_get_main_queue(), ^{
 
-        // ---- Privacy / consent: use kLevelPlay (runtime pointer, valid after dlopen) ----
-        ((VoidBoolIMP)objc_msgSend)((id)kLevelPlay,
-                                    @selector(setConsent:), consent);
-        ((VoidIdIdIMP)objc_msgSend)((id)kLevelPlay,
-                                    @selector(setMetaDataWithKey:value:),
-                                    @"is_coppa", coppa ? @"true" : @"false");
-        ((VoidIdIdIMP)objc_msgSend)((id)kLevelPlay,
-                                    @selector(setMetaDataWithKey:value:),
-                                    @"do_not_sell", ccpa ? @"true" : @"false");
+        // Privacy / consent
+        [LevelPlay setConsent:consent];
+        [LevelPlay setMetaDataWithKey:@"is_coppa" value:coppa ? @"true" : @"false"];
+        [LevelPlay setMetaDataWithKey:@"do_not_sell" value:ccpa ? @"true" : @"false"];
         if (debug) {
-            ((VoidBoolIMP)objc_msgSend)((id)kLevelPlay,
-                                        @selector(setAdaptersDebug:), YES);
+            [LevelPlay setAdaptersDebug:YES];
         }
 
-        // ---- Build LPMInitRequest ----
-        // alloc
-        id builder = ((AllocIMP)objc_msgSend)((id)kLPMInitRequestBuilder, @selector(alloc));
-        // initWithAppKey:
-        builder = ((IdIdIMP)objc_msgSend)(builder, @selector(initWithAppKey:), appKey);
-        // withUserId: (optional, returns self for chaining)
+        // Build LPMInitRequest
+        LPMInitRequestBuilder *builder =
+            [[LPMInitRequestBuilder alloc] initWithAppKey:appKey];
         if (userId.length) {
-            builder = ((IdIdIMP)objc_msgSend)(builder, @selector(withUserId:), userId);
+            [builder withUserId:userId];
         }
-        // build → LPMInitRequest
-        id initRequest = ((AllocIMP)objc_msgSend)(builder, @selector(build));
+        LPMInitRequest *initRequest = [builder build];
 
         if (!initRequest) {
             NSLog(@"[IronSourcePlugin] ERROR: LPMInitRequest build returned nil");
@@ -273,9 +224,9 @@ static int lua_init(lua_State *L) {
             return;
         }
 
-        // ---- Init LevelPlay SDK ----
-        // initWithRequest:completion: (request:id, completion:block)
-        void (^completion)(id, NSError *) = ^(id config, NSError *error) {
+        // Init LevelPlay SDK
+        [LevelPlay initWithRequest:initRequest completion:^(LPMConfiguration * _Nullable config,
+                                                            NSError * _Nullable error) {
             if (error) {
                 NSString *msg = [NSString stringWithFormat:@"%@ (%ld)",
                                  error.localizedDescription, (long)error.code];
@@ -287,32 +238,23 @@ static int lua_init(lua_State *L) {
             DispatchEvent("init", "success", NO, nil);
 
             // Create + load interstitial
-            if (intId.length && kLPMInterstitialAd) {
+            if (intId.length) {
                 if (!sInterstitialDelegate)
                     sInterstitialDelegate = [[ISPluginInterstitialDelegate alloc] init];
-                id ad = ((AllocIMP)objc_msgSend)((id)kLPMInterstitialAd, @selector(alloc));
-                ad = ((IdIdIMP)objc_msgSend)(ad, @selector(initWithAdUnitId:), intId);
-                sInterstitialAd = ad;
-                ((VoidIdIMP)objc_msgSend)(sInterstitialAd, @selector(setDelegate:), sInterstitialDelegate);
+                sInterstitialAd = [[LPMInterstitialAd alloc] initWithAdUnitId:intId];
+                [sInterstitialAd setDelegate:sInterstitialDelegate];
                 [sInterstitialAd loadAd];
             }
 
             // Create + load rewarded
-            if (rvId.length && kLPMRewardedAd) {
+            if (rvId.length) {
                 if (!sRewardedDelegate)
                     sRewardedDelegate = [[ISPluginRewardedDelegate alloc] init];
-                id ad = ((AllocIMP)objc_msgSend)((id)kLPMRewardedAd, @selector(alloc));
-                ad = ((IdIdIMP)objc_msgSend)(ad, @selector(initWithAdUnitId:), rvId);
-                sRewardedAd = ad;
-                ((VoidIdIMP)objc_msgSend)(sRewardedAd, @selector(setDelegate:), sRewardedDelegate);
+                sRewardedAd = [[LPMRewardedAd alloc] initWithAdUnitId:rvId];
+                [sRewardedAd setDelegate:sRewardedDelegate];
                 [sRewardedAd loadAd];
             }
-        };
-
-        // objc_msgSend for initWithRequest:completion: (request + block args)
-        ((VoidIdIdIMP)objc_msgSend)((id)kLevelPlay,
-                                    @selector(initWithRequest:completion:),
-                                    initRequest, completion);
+        }];
     });
 
     return 0;
@@ -354,30 +296,18 @@ static int lua_show(lua_State *L) {
 
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *vc = TopViewController();
-        typedef void (*ShowIMP)(id, SEL, UIViewController *, NSString *);
 
         if ([adType isEqualToString:@"interstitial"]) {
-            BOOL ready = NO;
-            if (sInterstitialAd)
-                ready = [sInterstitialAd respondsToSelector:@selector(isAdReady)] &&
-                        ((BOOL (*)(id,SEL))objc_msgSend)(sInterstitialAd, @selector(isAdReady));
-            if (ready) {
-                ((ShowIMP)objc_msgSend)(sInterstitialAd,
-                                        @selector(showAdWithViewController:placementName:),
-                                        vc, fp.length ? fp : nil);
+            if (sInterstitialAd && [sInterstitialAd isAdReady]) {
+                [sInterstitialAd showAdWithViewController:vc
+                                            placementName:fp.length ? fp : nil];
             } else {
                 DispatchEvent("interstitial", "show", YES, @"not ready");
             }
-
         } else if ([adType isEqualToString:@"rewardedVideo"]) {
-            BOOL ready = NO;
-            if (sRewardedAd)
-                ready = [sRewardedAd respondsToSelector:@selector(isAdReady)] &&
-                        ((BOOL (*)(id,SEL))objc_msgSend)(sRewardedAd, @selector(isAdReady));
-            if (ready) {
-                ((ShowIMP)objc_msgSend)(sRewardedAd,
-                                        @selector(showAdWithViewController:placementName:),
-                                        vc, fp.length ? fp : nil);
+            if (sRewardedAd && [sRewardedAd isAdReady]) {
+                [sRewardedAd showAdWithViewController:vc
+                                        placementName:fp.length ? fp : nil];
             } else {
                 DispatchEvent("rewardedVideo", "show", YES, @"not available");
             }
@@ -394,63 +324,19 @@ static int lua_isAvailable(lua_State *L) {
     NSString *adType = @(lua_tostring(L, 1));
     BOOL available = NO;
     if ([adType isEqualToString:@"interstitial"] && sInterstitialAd)
-        available = ((BOOL (*)(id,SEL))objc_msgSend)(sInterstitialAd, @selector(isAdReady));
+        available = [sInterstitialAd isAdReady];
     if ([adType isEqualToString:@"rewardedVideo"] && sRewardedAd)
-        available = ((BOOL (*)(id,SEL))objc_msgSend)(sRewardedAd, @selector(isAdReady));
+        available = [sRewardedAd isAdReady];
     lua_pushboolean(L, available ? 1 : 0);
     return 1;
 }
 
 // ---------------------------------------------------------------------------
-// Plugin entry point — called by CoronaBuilder when require("plugin.ironSource")
+// Plugin entry point
 // ---------------------------------------------------------------------------
 CORONA_EXPORT
 int luaopen_plugin_ironSource(lua_State *L) {
-
-    // ---- Step 1: dlopen IronSource.framework ----
-    // The framework is injected into <AppBundle>/Frameworks/ by build-ios.sh.
-    // It is NOT in LC_LOAD_DYLIB, so dyld does NOT load it at app launch.
-    // We must dlopen it before any ObjC class access. Use RTLD_NOW so all
-    // symbols are resolved immediately (not lazily) in case of symbol deps.
-
-    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
-    NSString *fwPath = [bundlePath stringByAppendingPathComponent:
-                        @"Frameworks/IronSource.framework/IronSource"];
-    void *handle = dlopen([fwPath UTF8String], RTLD_NOW | RTLD_GLOBAL);
-
-    if (!handle) {
-        NSLog(@"[IronSourcePlugin] WARNING: dlopen(%@) failed: %s", fwPath, dlerror());
-        // Secondary search path (privateFrameworksPath)
-        NSString *alt = [[[NSBundle mainBundle] privateFrameworksPath]
-                         stringByAppendingPathComponent:@"IronSource.framework/IronSource"];
-        handle = dlopen([alt UTF8String], RTLD_NOW | RTLD_GLOBAL);
-        if (!handle) {
-            NSLog(@"[IronSourcePlugin] ERROR: IronSource.framework not found at primary or secondary path. Ads disabled.");
-        } else {
-            NSLog(@"[IronSourcePlugin] IronSource.framework loaded (secondary path)");
-        }
-    } else {
-        NSLog(@"[IronSourcePlugin] IronSource.framework loaded: %@", fwPath);
-    }
-
-    // ---- Step 2: Obtain class pointers via ObjC runtime ----
-    // These look up classes by STRING NAME in the ObjC runtime — they find the
-    // classes registered by dlopen above. This completely bypasses the NULL
-    // classref slots in __DATA.__objc_classrefs that dyld bound at launch.
-    if (handle) {
-        kLevelPlay             = objc_getClass("LevelPlay");
-        kLPMInterstitialAd     = objc_getClass("LPMInterstitialAd");
-        kLPMRewardedAd         = objc_getClass("LPMRewardedAd");
-        kLPMInitRequestBuilder = objc_getClass("LPMInitRequestBuilder");
-
-        NSLog(@"[IronSourcePlugin] Runtime classes — LevelPlay:%@ IntAd:%@ RvAd:%@ Builder:%@",
-              kLevelPlay, kLPMInterstitialAd, kLPMRewardedAd, kLPMInitRequestBuilder);
-
-        gSDKLoaded = (kLevelPlay != Nil);
-        if (!gSDKLoaded) {
-            NSLog(@"[IronSourcePlugin] WARNING: dlopen succeeded but LevelPlay class not found");
-        }
-    }
+    NSLog(@"[IronSourcePlugin] v9.3.5 — IronSource statically linked, no dlopen needed");
 
     sL           = L;
     sListenerRef = NULL;
