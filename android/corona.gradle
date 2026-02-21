@@ -15,5 +15,5 @@ configurations.all {
 }
 
 dependencies {
-    implementation 'com.unity3d.ads-mediation:mediation-sdk:9.2.0'
+    implementation 'com.unity3d.ads-mediation:mediation-sdk:9.3.0'
 }
