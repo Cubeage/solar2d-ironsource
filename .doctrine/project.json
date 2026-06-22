@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "repo": "Cubeage/solar2d-ironsource",
+    "name": "Cubeage Solar2D IronSource Plugin",
+    "lifecycle": "production",
+    "layer": "foundation",
+    "summary": "Self-hosted Solar2D native plugin for IronSource and Unity LevelPlay, owning Android and iOS plugin source plus GitHub Release package artifacts consumed by games.",
+    "goals": [
+      "Maintain the Solar2D plugin.ironSource native integration for Android and iOS.",
+      "Package Android and iOS release artifacts that Solar2D apps can consume from GitHub Releases.",
+      "Keep IronSource SDK versioning, Solar2D metadata, and platform requirements explicit."
+    ],
+    "nonGoals": [
+      "Do not own game-specific ad placement policy, monetization strategy, or app runtime behavior.",
+      "Do not own the upstream IronSource SDK or Solar2D runtime.",
+      "Do not own central CI runner, enterprise release bot, or platform preview behavior."
+    ]
+  },
+  "boundaries": {
+    "owns": [
+      {
+        "name": "solar2d-ironsource-lua-api",
+        "description": "The plugin.ironSource Lua-facing API and event contract documented for Solar2D apps."
+      },
+      {
+        "name": "solar2d-ironsource-native-code",
+        "description": "Android and iOS native plugin source that bridges Solar2D to IronSource or Unity LevelPlay SDK behavior."
+      },
+      {
+        "name": "solar2d-ironsource-release-artifacts",
+        "description": "GitHub Release package artifacts android.tgz and iphone.tgz consumed by Solar2D build settings."
+      }
+    ],
+    "doesNotOwn": [
+      "Game-specific ad placement, monetization policy, analytics interpretation, or app runtime behavior.",
+      "Upstream IronSource SDK releases, Solar2D runtime behavior, or app-store submission policy.",
+      "Central Sylphx preview platform, central CI runner capacity, branch protection policy, or enterprise release bot behavior."
+    ],
+    "publicSurfaces": [
+      {
+        "type": "api",
+        "name": "Solar2D IronSource Lua API",
+        "location": "README.md"
+      },
+      {
+        "type": "package-export",
+        "name": "Android plugin package",
+        "location": ".github/workflows/release.yml:android.tgz"
+      },
+      {
+        "type": "package-export",
+        "name": "iOS plugin package",
+        "location": ".github/workflows/release.yml:iphone.tgz"
+      },
+      {
+        "type": "manifest",
+        "name": "Solar2D plugin metadata",
+        "location": "metadata.lua"
+      },
+      {
+        "type": "workflow",
+        "name": "Package release workflow",
+        "location": ".github/workflows/release.yml"
+      }
+    ],
+    "allowedDependencies": [
+      {
+        "repo": "Cubeage/fun-mahjong",
+        "surface": "published plugin package consumed from GitHub Releases",
+        "direction": "peer-public"
+      },
+      {
+        "repo": "coronalabs/corona",
+        "surface": "Solar2D SDK release assets and runtime headers",
+        "direction": "external"
+      }
+    ],
+    "forbiddenCouplings": [
+      "Do not add game-specific ad placement policy or monetization behavior to the reusable plugin.",
+      "Do not consume private app internals from plugin code.",
+      "Do not treat source revert as sufficient recovery after release artifacts have been published.",
+      "Do not encode central release-bot, runner-capacity, secret-management, or branch-protection policy as plugin behavior."
+    ]
+  },
+  "documentation": {
+    "adr": {
+      "path": "docs/adr/",
+      "status": "planned"
+    },
+    "specs": {
+      "path": "README.md",
+      "status": "present"
+    },
+    "catalog": {
+      "path": ".doctrine/project.json",
+      "status": "present"
+    },
+    "runbooks": {
+      "path": "README.md",
+      "status": "present"
+    },
+    "generatedReferences": {
+      "path": "metadata.lua",
+      "status": "present"
+    }
+  },
+  "delivery": {
+    "ciModel": "legacy-ci",
+    "requiredContexts": [],
+    "deployPath": "Release artifacts are built by .github/workflows/build-android.yml and .github/workflows/build-ios.yml, then published by .github/workflows/release.yml on v* tag pushes. No required PR status context is currently configured in branch protection.",
+    "productionProof": "Release changes require Android and iOS build artifacts, package smoke evidence, GitHub Release asset readback, and consumer compatibility notes for affected apps. Manifest-only changes are proven by the doctrine project-control audit.",
+    "recoveryClass": "forward-fix-only",
+    "packageRelease": {
+      "publishesPackages": true,
+      "ecosystems": [
+        "github-release",
+        "solar2d-plugin"
+      ],
+      "releaseIntent": "Current state is a v* tag-triggered release workflow; dedicated release-intent PR is not yet adopted.",
+      "versionPr": "Not currently implemented; future path should use a bot-owned version or release PR before tag publication.",
+      "publisher": ".github/workflows/release.yml currently publishes with repository GITHUB_TOKEN; future path should use a dedicated least-privilege release GitHub App or bot.",
+      "requiredContexts": [
+        "build-android",
+        "build-ios",
+        "release"
+      ],
+      "publishProof": "GitHub Release readback for android.tgz and iphone.tgz plus package smoke evidence."
+    }
+  },
+  "adoption": {
+    "status": "baseline",
+    "gaps": [
+      {
+        "id": "no-required-pr-contexts",
+        "description": "Branch protection has no required PR status contexts for plugin or package changes.",
+        "owner": "Cubeage/solar2d-ironsource",
+        "target": "Future CI adoption issue"
+      },
+      {
+        "id": "release-bot-not-adopted",
+        "description": "Package release is tag-triggered and currently uses GITHUB_TOKEN instead of a dedicated release GitHub App or bot-owned version PR.",
+        "owner": "Cubeage/solar2d-ironsource",
+        "target": "ADR-59 release control-plane adoption"
+      },
+      {
+        "id": "central-admission-not-adopted",
+        "description": "Repository has not adopted central ADR-29 stable admission fan-in contexts.",
+        "owner": "SylphxAI/doctrine#61",
+        "target": "Central CI runner and admission control plane"
+      }
+    ]
+  }
+}
