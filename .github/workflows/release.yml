@@ -14,7 +14,7 @@ jobs:
 
   release:
     needs: [ build-android, build-ios ]
-    runs-on: ubuntu-latest
+    runs-on: sylphx-linux-standard
     permissions:
       contents: write
 
