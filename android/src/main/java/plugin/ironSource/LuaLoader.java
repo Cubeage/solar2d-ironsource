@@ -130,42 +130,99 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
     // Helper: dispatch an event table to the Lua listener
     // -------------------------------------------------------------------------
 
+    /**
+     * Returns {@code value}, or an empty string when it is null.
+     *
+     * <p>Never hand a null String to JNLua: {@code LuaState.pushString(null)} is not a
+     * nil-push. The JNI bridge only pushes when the JNI string conversion succeeds, so a
+     * null either aborts the call ({@code NullPointerException}) or silently skips the
+     * push, which leaves the event table on the Lua stack and makes every following
+     * {@code setField(-2, ...)} target the wrong slot. Both outcomes corrupt the event
+     * being built and can surface as a Lua error (observed in production as
+     * {@code LuaRuntimeException: nil}).
+     */
+    private static String nonNull(final String value) {
+        return (value != null) ? value : "";
+    }
+
+    /**
+     * Builds and dispatches an event table to the Lua listener.
+     *
+     * <p>Null policy (fields are never pushed as null):
+     * <ul>
+     *   <li>{@code type} / {@code phase}: null becomes {@code ""}. No current call site
+     *       passes null, so this only guards future/incorrect callers.</li>
+     *   <li>{@code isError}: primitive boolean, always emitted.</li>
+     *   <li>{@code response}: null keeps its existing Lua-visible meaning — the field is
+     *       omitted and Lua sees nil, which is what consumers already handle
+     *       (e.g. {@code event.response or "..."}). Emitting {@code ""} here would change
+     *       Lua truthiness on non-crashing paths, so it is deliberately not done.</li>
+     * </ul>
+     *
+     * <p>A failed dispatch is logged and dropped instead of killing the app: IronSource
+     * callbacks run on the SDK/UI thread, so an escaping exception takes the whole
+     * process down before the app can recover. On failure the Lua stack top is restored so
+     * a half-built event cannot desynchronize the next dispatch.
+     */
     private void dispatchEvent(final String type, final String phase,
                                final boolean isError, final String response) {
         final CoronaActivity activity = CoronaEnvironment.getCoronaActivity();
         if (activity == null) return;
 
-        activity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (fRuntime == null) return;
-                LuaState L = fRuntime.getLuaState();
-                if (L == null) return;
-                if (listenerRef == CoronaLua.REFNIL) return;
+        final String eventType = nonNull(type);
+        final String eventPhase = nonNull(phase);
+        // response keeps its historical meaning: a null response leaves the field out
+        // (Lua sees nil), which consumers already handle.
+        final String eventResponse = response;
 
-                CoronaLua.newEvent(L, "ironSource");
+        try {
+            activity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (fRuntime == null) return;
+                    LuaState L = fRuntime.getLuaState();
+                    if (L == null) return;
+                    if (listenerRef == CoronaLua.REFNIL) return;
 
-                L.pushString(type);
-                L.setField(-2, "type");
+                    int stackTop = -1;
+                    try {
+                        stackTop = L.getTop();
 
-                L.pushString(phase);
-                L.setField(-2, "phase");
+                        CoronaLua.newEvent(L, "ironSource");
 
-                L.pushBoolean(isError);
-                L.setField(-2, "isError");
+                        L.pushString(eventType);
+                        L.setField(-2, "type");
 
-                if (response != null) {
-                    L.pushString(response);
-                    L.setField(-2, "response");
+                        L.pushString(eventPhase);
+                        L.setField(-2, "phase");
+
+                        L.pushBoolean(isError);
+                        L.setField(-2, "isError");
+
+                        if (eventResponse != null) {
+                            L.pushString(eventResponse);
+                            L.setField(-2, "response");
+                        }
+
+                        CoronaLua.dispatchEvent(L, listenerRef, 0);
+                    } catch (Throwable t) {
+                        Log.e(TAG, "Error dispatching ironSource event ("
+                                + eventType + "/" + eventPhase + "): " + t, t);
+                    } finally {
+                        if (stackTop >= 0) {
+                            try {
+                                L.setTop(stackTop);
+                            } catch (Throwable t) {
+                                Log.e(TAG, "Error restoring Lua stack after ironSource event dispatch: " + t);
+                            }
+                        }
+                    }
                 }
-
-                try {
-                    CoronaLua.dispatchEvent(L, listenerRef, 0);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error dispatching ironSource event: " + e.getMessage());
-                }
-            }
-        });
+            });
+        } catch (Throwable t) {
+            Log.e(TAG, "Error scheduling ironSource event dispatch ("
+                    + eventType + "/" + eventPhase + "): " + t, t);
+        }
     }
 
     // -------------------------------------------------------------------------
