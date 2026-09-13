@@ -21,5 +21,7 @@ trap 'rm -rf "$out"' EXIT
 find "$here/stubs" "$here/test" "$repo/android/src/main/java/plugin/ironSource" \
     -name '*.java' | sort > "$out/sources.txt"
 
-javac -Xlint:-unchecked -d "$out/classes" @"$out/sources.txt"
-java -cp "$out/classes" plugin.ironSource.LuaLoaderDispatchTest
+# -encoding UTF-8: the plugin source contains non-ASCII comment characters and CI
+# runners do not necessarily run with a UTF-8 default encoding.
+javac -encoding UTF-8 -Xlint:-unchecked -d "$out/classes" @"$out/sources.txt"
+java -Dfile.encoding=UTF-8 -cp "$out/classes" plugin.ironSource.LuaLoaderDispatchTest
