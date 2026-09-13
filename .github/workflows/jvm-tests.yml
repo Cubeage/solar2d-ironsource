@@ -1,0 +1,28 @@
+name: JVM Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  jvm-tests:
+    runs-on: sylphx-linux-standard
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Self-contained: compiles android/src/main/java/plugin/ironSource/LuaLoader.java
+      # against tests/jvm/stubs and runs the dispatch regression suite. No Android SDK,
+      # no Gradle, no network.
+      - name: Run JVM regression tests
+        run: bash tests/jvm/run.sh

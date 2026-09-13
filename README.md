@@ -71,6 +71,10 @@ local avail = ironSource.isAvailable("rewardedVideo")
 | ironSource | rewardedVideo | closed | false |
 | ironSource | rewardedVideo | show | false / true |
 
+Every event carries `name`, `type`, `phase` and `isError`. `response` carries the SDK
+message when there is one (for example error text) and is omitted otherwise, so the Lua
+field is `nil`. Event dispatch failures are logged by the plugin and never crash the app.
+
 ---
 
 ## Building from source
