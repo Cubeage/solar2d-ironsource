@@ -10,7 +10,11 @@ public final class LevelPlayReward {
         this.amount = amount;
     }
 
-    /** May return null, like the SDK when the reward has no name. */
+    /**
+     * The real SDK (9.3.0, bytecode-verified) rejects a null name in the constructor
+     * ({@code Intrinsics.checkNotNullParameter}); this stub accepts null so the tests can
+     * pin the plugin's defensive null policy on the dispatch path.
+     */
     public String getName() {
         return name;
     }

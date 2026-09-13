@@ -18,7 +18,11 @@ public final class LevelPlayAdError {
         return code;
     }
 
-    /** May return null, like the SDK: "No fill" / error-text-less failures report no message. */
+    /**
+     * The real SDK (9.3.0, bytecode-verified) coalesces an absent message to {@code ""};
+     * this stub additionally accepts null so the tests can pin the plugin's own defensive
+     * null policy on the dispatch path.
+     */
     public String getErrorMessage() {
         return message;
     }

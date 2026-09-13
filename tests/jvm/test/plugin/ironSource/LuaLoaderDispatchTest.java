@@ -166,6 +166,62 @@ public final class LuaLoaderDispatchTest {
             }
         });
 
+        test.caseTest("reentrantDispatch_keepsStackBalanced", new Case() {
+            public void run() throws Exception {
+                test.boot();
+                test.initSuccess();
+                events.clear();
+
+                // A listener that dispatches the next event from inside the current dispatch.
+                CoronaLua.sink = new CoronaLua.EventSink() {
+                    private boolean reentered;
+
+                    public void onEvent(Map<String, Object> event) {
+                        events.add(event);
+                        if (!reentered) {
+                            reentered = true;
+                            LevelPlayRewardedAd.lastListener.onAdClosed(new LevelPlayAdInfo());
+                        }
+                    }
+                };
+
+                test.rewarded().onAdLoaded(new LevelPlayAdInfo());
+
+                test.expectEventCount(2);
+                test.expectEquals("available", events.get(0).get("phase"), "outer event phase");
+                test.expectEquals("closed", events.get(1).get("phase"), "nested event phase");
+                test.expectStackClean();
+            }
+        });
+
+        test.caseTest("reentrantDispatchFailure_isContained", new Case() {
+            public void run() throws Exception {
+                test.boot();
+                test.initSuccess();
+                events.clear();
+
+                CoronaLua.sink = new CoronaLua.EventSink() {
+                    private boolean reentered;
+
+                    public void onEvent(Map<String, Object> event) {
+                        events.add(event);
+                        if (!reentered) {
+                            reentered = true;
+                            CoronaLua.failNextNewEvent = new LuaRuntimeException("nil");
+                            LevelPlayRewardedAd.lastListener.onAdClosed(new LevelPlayAdInfo());
+                        }
+                    }
+                };
+
+                test.rewarded().onAdLoaded(new LevelPlayAdInfo());
+
+                test.expectEventCount(1); // the nested event is dropped, the outer one is delivered
+                test.expectEquals("available", events.get(0).get("phase"), "outer event phase");
+                test.expectLoggedError("Error dispatching ironSource event");
+                test.expectStackClean();
+            }
+        });
+
         test.caseTest("allEventPaths_neverPushNull", new Case() {
             public void run() throws Exception {
                 test.boot();

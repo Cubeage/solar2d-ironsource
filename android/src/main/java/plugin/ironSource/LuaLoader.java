@@ -134,12 +134,11 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
      * Returns {@code value}, or an empty string when it is null.
      *
      * <p>Never hand a null String to JNLua: {@code LuaState.pushString(null)} is not a
-     * nil-push. The JNI bridge only pushes when the JNI string conversion succeeds, so a
-     * null either aborts the call ({@code NullPointerException}) or silently skips the
-     * push, which leaves the event table on the Lua stack and makes every following
-     * {@code setField(-2, ...)} target the wrong slot. Both outcomes corrupt the event
-     * being built and can surface as a Lua error (observed in production as
-     * {@code LuaRuntimeException: nil}).
+     * nil-push. JNLua's JNI bridge rejects the null ({@code checknotnull} ->
+     * {@code NullPointerException}, jnlua.c:1852-1863) and pushes nothing
+     * (jnlua.c:589-604), which leaves the event table on the Lua stack and makes every
+     * following {@code setField(-2, ...)} target the wrong slot. That is a latent crash
+     * hazard on this path; the failed dispatch also has to be contained (see below).
      */
     private static String nonNull(final String value) {
         return (value != null) ? value : "";
@@ -159,10 +158,13 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
      *       Lua truthiness on non-crashing paths, so it is deliberately not done.</li>
      * </ul>
      *
-     * <p>A failed dispatch is logged and dropped instead of killing the app: IronSource
-     * callbacks run on the SDK/UI thread, so an escaping exception takes the whole
-     * process down before the app can recover. On failure the Lua stack top is restored so
-     * a half-built event cannot desynchronize the next dispatch.
+     * <p>A failure while building or dispatching the event is logged and dropped instead
+     * of killing the app. IronSource callbacks run on the SDK/UI thread, so an escaping
+     * exception takes the process down before the app can recover — that is the reported
+     * production crash, where a {@code LuaRuntimeException: nil} raised in
+     * {@code CoronaLua.newEvent} escaped this method into the SDK callback because only
+     * {@code CoronaLua.dispatchEvent} used to be guarded. On failure the Lua stack top is
+     * restored so a half-built event cannot desynchronize the next dispatch.
      */
     private void dispatchEvent(final String type, final String phase,
                                final boolean isError, final String response) {

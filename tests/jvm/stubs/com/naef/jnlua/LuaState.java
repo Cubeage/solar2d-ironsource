@@ -12,12 +12,12 @@ import java.util.Map;
  * sources vendored by Solar2D (coronalabs/corona, external/JNLua/src/main/c/jnlua.c):
  *
  * <ul>
- *   <li>{@code pushString(null)}: the JNI bridge pushes only when the JNI string
- *       conversion succeeds (jnlua.c:589-604), so a null argument either raises
- *       {@code NullPointerException} (JVM) or silently pushes nothing (ART), leaving the
- *       Lua stack one element shorter than the caller assumes. This stub raises
- *       {@code NullPointerException} — the strict end of that behaviour — and records the
- *       attempt in {@link #nullPushes}.</li>
+ *   <li>{@code pushString(null)}: the JNI bridge rejects the null through
+ *       {@code getstringchars} -> {@code checknotnull} ({@code NullPointerException},
+ *       message "null", jnlua.c:1852-1863) and therefore pushes nothing at all
+ *       (jnlua.c:589-604), leaving the Lua stack one element shorter than the caller
+ *       assumes. This stub does the same and records the attempt in
+ *       {@link #nullPushes}.</li>
  *   <li>{@code setField}: the index is validated ("illegal index") and the target must be a
  *       table ("illegal type") before the value is popped (jnlua.c:1339-1363).</li>
  *   <li>{@code pop(n)} goes through {@code setTop(-n-1)} and validates the count
@@ -72,7 +72,7 @@ public class LuaState {
     public void pushString(String s) {
         if (s == null) {
             nullPushes++;
-            throw new NullPointerException("string must not be null");
+            throw new NullPointerException("null");
         }
         stack.add(s);
     }
