@@ -25,6 +25,8 @@ Exit code 0 means every check passed; the command prints `N checks, M failure(s)
   consumers already handle; a non-null `response` is passed through unchanged.
 * Every event path (loaded / displayed / clicked / closed / reward / show / load-failed
   / init failed) never calls `pushString(null)`.
+* An unknown `adUnitType` on `load` / `show` emits `type = "load"` / `"show"`,
+  `phase = "failed"`, `isError = true` and the rejected value in `response`.
 
 ## Why the stand-ins look the way they do
 

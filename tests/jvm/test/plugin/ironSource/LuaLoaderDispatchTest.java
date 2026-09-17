@@ -306,6 +306,42 @@ public final class LuaLoaderDispatchTest {
             }
         });
 
+        test.caseTest("unknownShowAdUnitType_emitsErrorEvent", new Case() {
+            public void run() throws Exception {
+                test.boot();
+                test.initSuccess();
+                events.clear();
+
+                test.showAd("banner");
+
+                test.expectEventCount(1);
+                Map<String, Object> event = events.get(0);
+                test.expectEquals("show", event.get("type"), "event.type");
+                test.expectEquals("failed", event.get("phase"), "event.phase");
+                test.expectEquals(Boolean.TRUE, event.get("isError"), "event.isError");
+                test.expectEquals("unknown adUnitType: banner", event.get("response"), "event.response");
+                test.expectStackClean();
+            }
+        });
+
+        test.caseTest("unknownLoadAdUnitType_emitsErrorEvent", new Case() {
+            public void run() throws Exception {
+                test.boot();
+                test.initSuccess();
+                events.clear();
+
+                test.loadAd("banner");
+
+                test.expectEventCount(1);
+                Map<String, Object> event = events.get(0);
+                test.expectEquals("load", event.get("type"), "event.type");
+                test.expectEquals("failed", event.get("phase"), "event.phase");
+                test.expectEquals(Boolean.TRUE, event.get("isError"), "event.isError");
+                test.expectEquals("unknown adUnitType: banner", event.get("response"), "event.response");
+                test.expectStackClean();
+            }
+        });
+
         System.out.println();
         System.out.println(checks + " checks, " + failures + " failure(s)");
         if (failures > 0) {
@@ -365,6 +401,13 @@ public final class LuaLoaderDispatchTest {
         final Map<?, ?> module = pluginModule();
         luaState.pushString(adUnitType);
         ((JavaFunction) module.get("show")).invoke(luaState);
+        luaState.setTop(0);
+    }
+
+    private void loadAd(String adUnitType) {
+        final Map<?, ?> module = pluginModule();
+        luaState.pushString(adUnitType);
+        ((JavaFunction) module.get("load")).invoke(luaState);
         luaState.setTop(0);
     }
 

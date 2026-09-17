@@ -482,6 +482,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                         }
                     } else {
                         Log.e(TAG, "ironSource.load() – unknown adUnitType: " + adUnitType);
+                        dispatchEvent("load", "failed", true, "unknown adUnitType: " + adUnitType);
                     }
                 }
             });
@@ -541,6 +542,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                         }
                     } else {
                         Log.e(TAG, "ironSource.show() – unknown adUnitType: " + adUnitType);
+                        dispatchEvent("show", "failed", true, "unknown adUnitType: " + adUnitType);
                     }
                 }
             });
