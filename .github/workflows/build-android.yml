@@ -20,6 +20,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       # CoronaCards-Android.zip contains CoronaCards.aar
       # We extract classes.jar from inside the AAR (it's a zip file)
       - name: Fetch Solar2D Corona classes (from CoronaCards AAR)
