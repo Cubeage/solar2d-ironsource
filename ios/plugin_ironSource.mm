@@ -56,17 +56,37 @@ static LPMRewardedAd     *sRewardedAd     = nil;
 // Event dispatch helper
 // ---------------------------------------------------------------------------
 static void DispatchEvent(const char *type, const char *phase, BOOL isError, NSString *response) {
+    // Never hand a null pointer to lua_pushstring: it is not a nil-push, it
+    // leaves the freshly created event table on the stack and every following
+    // lua_setfield then targets the wrong slot. The Android side of this plugin
+    // crashed the host app exactly this way (illegal type raised out of the
+    // IronSource load-failed callback); this keeps the iOS lane equally safe and
+    // also contains any Lua failure instead of letting it escape the SDK
+    // callback and take the process down.
+    const char *eventType = (type != NULL) ? type : "";
+    const char *eventPhase = (phase != NULL) ? phase : "";
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!sL || !sListenerRef) return;
-        CoronaLuaNewEvent(sL, "ironSource");
-        lua_pushstring(sL, type);               lua_setfield(sL, -2, "type");
-        lua_pushstring(sL, phase);              lua_setfield(sL, -2, "phase");
-        lua_pushboolean(sL, isError ? 1 : 0);  lua_setfield(sL, -2, "isError");
-        if (response) {
-            lua_pushstring(sL, [response UTF8String]);
-            lua_setfield(sL, -2, "response");
+        int stackTop = -1;
+        @try {
+            stackTop = lua_gettop(sL);
+            CoronaLuaNewEvent(sL, "ironSource");
+            lua_pushstring(sL, eventType);          lua_setfield(sL, -2, "type");
+            lua_pushstring(sL, eventPhase);         lua_setfield(sL, -2, "phase");
+            lua_pushboolean(sL, isError ? 1 : 0);  lua_setfield(sL, -2, "isError");
+            if (response) {
+                lua_pushstring(sL, [response UTF8String]);
+                lua_setfield(sL, -2, "response");
+            }
+            CoronaLuaDispatchEvent(sL, sListenerRef, 0);
+        } @catch (NSException *exception) {
+            NSLog(@"[IronSourcePlugin] Error dispatching ironSource event (%s/%s): %@",
+                  eventType, eventPhase, exception);
+        } @finally {
+            if (stackTop >= 0) {
+                lua_settop(sL, stackTop);
+            }
         }
-        CoronaLuaDispatchEvent(sL, sListenerRef, 0);
     });
 }
 
