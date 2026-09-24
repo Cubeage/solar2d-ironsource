@@ -23,6 +23,8 @@ import com.unity3d.mediation.LevelPlayConfiguration;
 import com.unity3d.mediation.LevelPlayInitError;
 import com.unity3d.mediation.LevelPlayInitListener;
 import com.unity3d.mediation.LevelPlayInitRequest;
+import com.unity3d.mediation.impression.LevelPlayImpressionData;
+import com.unity3d.mediation.impression.LevelPlayImpressionDataListener;
 import com.unity3d.mediation.interstitial.LevelPlayInterstitialAd;
 import com.unity3d.mediation.interstitial.LevelPlayInterstitialAdListener;
 import com.unity3d.mediation.rewarded.LevelPlayReward;
@@ -243,6 +245,39 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
         }
     }
 
+    private static boolean impressionListenerAdded = false;
+
+    /**
+     * Registers the LevelPlay impression-data listener once. Each impression is
+     * dispatched as {@code type="impression", phase="impressionData"} with
+     * {@code response} = the impression's {@code allData} JSON (adNetwork, adFormat,
+     * revenue, precision, country, placement, instanceName, mediationAdUnitId, ...).
+     */
+    private void registerImpressionListener() {
+        synchronized (LuaLoader.class) {
+            if (impressionListenerAdded) return;
+            impressionListenerAdded = true;
+        }
+        try {
+            LevelPlay.addImpressionDataListener(new LevelPlayImpressionDataListener() {
+                @Override
+                public void onImpressionSuccess(LevelPlayImpressionData impressionData) {
+                    String json = null;
+                    try {
+                        if (impressionData != null && impressionData.getAllData() != null) {
+                            json = impressionData.getAllData().toString();
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "Error reading LevelPlay impression data: " + t);
+                    }
+                    if (json != null) dispatchEvent("impression", "impressionData", false, json);
+                }
+            });
+        } catch (Throwable t) {
+            Log.e(TAG, "Error registering LevelPlay impression listener: " + t, t);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // init(listener, options)
     // -------------------------------------------------------------------------
@@ -333,6 +368,11 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                             builder = builder.withUserId(userId);
                         }
                         final LevelPlayInitRequest initRequest = builder.build();
+
+                        // Impression-level revenue (ILRD): one listener per process. The
+                        // event's response is LevelPlay's full impression JSON (allData),
+                        // which the title forwards verbatim to its MMP.
+                        registerImpressionListener();
 
                         // Initialise LevelPlay SDK
                         LevelPlay.init(activity, initRequest, new LevelPlayInitListener() {
