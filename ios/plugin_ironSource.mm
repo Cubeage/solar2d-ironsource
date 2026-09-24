@@ -261,6 +261,13 @@ static int lua_init(lua_State *L) {
             return;
         }
 
+        // Impression-level revenue: one process-wide delegate (LevelPlay 9.3
+        // has no per-ad impression delegate).
+        if (!sImpressionDelegate) {
+            sImpressionDelegate = [[ISPluginImpressionDelegate alloc] init];
+            [LevelPlay addImpressionDataDelegate:sImpressionDelegate];
+        }
+
         // Init LevelPlay SDK
         [LevelPlay initWithRequest:initRequest completion:^(LPMConfiguration * _Nullable config,
                                                             NSError * _Nullable error) {
@@ -280,8 +287,6 @@ static int lua_init(lua_State *L) {
                     sInterstitialDelegate = [[ISPluginInterstitialDelegate alloc] init];
                 sInterstitialAd = [[LPMInterstitialAd alloc] initWithAdUnitId:intId];
                 [sInterstitialAd setDelegate:sInterstitialDelegate];
-                if (!sImpressionDelegate) sImpressionDelegate = [[ISPluginImpressionDelegate alloc] init];
-                [sInterstitialAd setImpressionDataDelegate:sImpressionDelegate];
                 [sInterstitialAd loadAd];
             }
 
@@ -291,8 +296,6 @@ static int lua_init(lua_State *L) {
                     sRewardedDelegate = [[ISPluginRewardedDelegate alloc] init];
                 sRewardedAd = [[LPMRewardedAd alloc] initWithAdUnitId:rvId];
                 [sRewardedAd setDelegate:sRewardedDelegate];
-                if (!sImpressionDelegate) sImpressionDelegate = [[ISPluginImpressionDelegate alloc] init];
-                [sRewardedAd setImpressionDataDelegate:sImpressionDelegate];
                 [sRewardedAd loadAd];
             }
         }];
