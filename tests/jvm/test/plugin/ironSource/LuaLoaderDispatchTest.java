@@ -89,6 +89,31 @@ public final class LuaLoaderDispatchTest {
             }
         });
 
+        test.caseTest("impressionData_dispatchesTheFullIlrdJson", new Case() {
+            public void run() throws Exception {
+                test.boot();
+                test.initSuccess();
+                events.clear();
+
+                test.expectEquals(Integer.valueOf(1), Integer.valueOf(LevelPlay.impressionListeners.size()), "one impression listener");
+                String ilrd = "{\"adNetwork\":\"UnityAds\",\"adFormat\":\"rewarded\",\"revenue\":0.0123,\"precision\":\"BID\",\"country\":\"HK\"}";
+                LevelPlay.impressionListeners.get(0).onImpressionSuccess(
+                        new com.unity3d.mediation.impression.LevelPlayImpressionData(new org.json.JSONObject(ilrd)));
+
+                test.expectEventCount(1);
+                Map<String, Object> event = events.get(0);
+                test.expectEquals("impression", event.get("type"), "event.type");
+                test.expectEquals("impressionData", event.get("phase"), "event.phase");
+                test.expectEquals(Boolean.FALSE, event.get("isError"), "event.isError");
+                test.expectEquals(ilrd, event.get("response"), "event.response is allData verbatim");
+                test.expectStackClean();
+
+                // A second init never adds a second listener (no double-counted revenue).
+                test.boot();
+                test.expectEquals(Integer.valueOf(1), Integer.valueOf(LevelPlay.impressionListeners.size()), "still one impression listener");
+            }
+        });
+
         test.caseTest("nullTypeAndPhase_neverReachJnlua", new Case() {
             public void run() throws Exception {
                 test.boot();

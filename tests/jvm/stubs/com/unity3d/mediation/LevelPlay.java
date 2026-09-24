@@ -28,6 +28,14 @@ public final class LevelPlay {
     public static void setAdaptersDebug(boolean enabled) {
     }
 
+    /** Test hook: impression listeners the plugin registered. */
+    public static final java.util.List<com.unity3d.mediation.impression.LevelPlayImpressionDataListener> impressionListeners =
+            new java.util.ArrayList<>();
+
+    public static void addImpressionDataListener(com.unity3d.mediation.impression.LevelPlayImpressionDataListener listener) {
+        impressionListeners.add(listener);
+    }
+
     public static boolean setDynamicUserId(String userId) {
         return true;
     }

@@ -182,6 +182,23 @@ static UIViewController *TopViewController(void) {
 - (void)didChangeAdInfo:(LPMAdInfo *)adInfo {}
 @end
 
+// Impression-level revenue (ILRD): each impression is dispatched as
+// type="impression", phase="impressionData", response = LevelPlay's allData JSON.
+@interface ISPluginImpressionDelegate : NSObject <LPMImpressionDataDelegate>
+@end
+
+@implementation ISPluginImpressionDelegate
+- (void)impressionDataDidSucceed:(LPMImpressionData *)impressionData {
+    NSDictionary *all = impressionData.allData;
+    if (![all isKindOfClass:[NSDictionary class]] || ![NSJSONSerialization isValidJSONObject:all]) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:all options:0 error:nil];
+    if (!data) return;
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (json) DispatchEvent("impression", "impressionData", NO, json);
+}
+@end
+
+static ISPluginImpressionDelegate   *sImpressionDelegate   = nil;
 static ISPluginInterstitialDelegate *sInterstitialDelegate = nil;
 static ISPluginRewardedDelegate     *sRewardedDelegate     = nil;
 
@@ -263,6 +280,8 @@ static int lua_init(lua_State *L) {
                     sInterstitialDelegate = [[ISPluginInterstitialDelegate alloc] init];
                 sInterstitialAd = [[LPMInterstitialAd alloc] initWithAdUnitId:intId];
                 [sInterstitialAd setDelegate:sInterstitialDelegate];
+                if (!sImpressionDelegate) sImpressionDelegate = [[ISPluginImpressionDelegate alloc] init];
+                [sInterstitialAd setImpressionDataDelegate:sImpressionDelegate];
                 [sInterstitialAd loadAd];
             }
 
@@ -272,6 +291,8 @@ static int lua_init(lua_State *L) {
                     sRewardedDelegate = [[ISPluginRewardedDelegate alloc] init];
                 sRewardedAd = [[LPMRewardedAd alloc] initWithAdUnitId:rvId];
                 [sRewardedAd setDelegate:sRewardedDelegate];
+                if (!sImpressionDelegate) sImpressionDelegate = [[ISPluginImpressionDelegate alloc] init];
+                [sRewardedAd setImpressionDataDelegate:sImpressionDelegate];
                 [sRewardedAd loadAd];
             }
         }];
