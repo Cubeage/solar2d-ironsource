@@ -34,6 +34,12 @@ public class CoronaLua {
 
     public static EventSink sink;
     public static int dispatchCount;
+    /** Lua VM touched while on the Android UI thread (must stay 0: the VM is not thread-safe). */
+    public static int uiThreadLuaAccesses;
+
+    private static void checkThread() {
+        if (android.app.Activity.uiThreadDepth > 0) uiThreadLuaAccesses++;
+    }
 
     public static int newRef(LuaState L, int index) {
         return 1;
@@ -48,6 +54,7 @@ public class CoronaLua {
     }
 
     public static void newEvent(LuaState L, String eventName) {
+        checkThread();
         L.newTable();
         L.pushString(eventName);
         if (failNextNewEvent != null) {
@@ -61,6 +68,7 @@ public class CoronaLua {
     }
 
     public static void dispatchEvent(LuaState L, int listenerRef, int nresults) throws Exception {
+        checkThread();
         int eventIndex = L.getTop();
 
         if (failNextDispatchEvent != null) {

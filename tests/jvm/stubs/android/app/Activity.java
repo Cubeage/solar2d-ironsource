@@ -6,6 +6,14 @@ import android.content.Context;
 public class Activity extends Context {
     /** Runs the action on the UI thread. Mirrors Activity.runOnUiThread: immediate when called on the UI thread. */
     public void runOnUiThread(Runnable action) {
-        action.run();
+        uiThreadDepth++;
+        try {
+            action.run();
+        } finally {
+            uiThreadDepth--;
+        }
     }
+
+    /** > 0 while code runs inside runOnUiThread, i.e. on the Android UI thread. */
+    public static int uiThreadDepth;
 }

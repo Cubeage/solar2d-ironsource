@@ -13,6 +13,8 @@ import com.ansca.corona.CoronaEnvironment;
 import com.ansca.corona.CoronaLua;
 import com.ansca.corona.CoronaRuntime;
 import com.ansca.corona.CoronaRuntimeListener;
+import com.ansca.corona.CoronaRuntimeTask;
+import com.ansca.corona.CoronaRuntimeTaskDispatcher;
 
 import com.unity3d.mediation.LevelPlay;
 import com.unity3d.mediation.LevelPlayAdError;
@@ -59,6 +61,15 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
 
     /** Store the CoronaRuntime so we can access LuaState from callbacks. */
     private CoronaRuntime fRuntime;
+    /**
+     * Posts work to the Corona runtime (Lua) thread. Created from the Lua thread in
+     * {@code init}. The Lua VM is not thread-safe: touching it from the Android UI
+     * thread, as {@code activity.runOnUiThread} dispatch did, races the runtime thread.
+     * That race is the native SIGSEGV in {@code lua_getinfo}, with
+     * {@code LuaLoader$1.run <- Activity.runOnUiThread} on the stack, seen on Firebase
+     * Test Lab (Fun Mahjong versionCode 668, Galaxy A16, 12 s after launch).
+     */
+    private volatile CoronaRuntimeTaskDispatcher fDispatcher;
 
     /** LevelPlay ad unit objects – created after SDK init succeeds. */
     private LevelPlayInterstitialAd interstitialAd;
@@ -96,6 +107,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
         }
         listenerRef  = CoronaLua.REFNIL;
         fRuntime     = null;
+        fDispatcher  = null;
         interstitialAd = null;
         rewardedAd     = null;
     }
@@ -177,12 +189,16 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
         // (Lua sees nil), which consumers already handle.
         final String eventResponse = response;
 
+        final CoronaRuntimeTaskDispatcher dispatcher = fDispatcher;
+        if (dispatcher == null) return;
+
         try {
-            activity.runOnUiThread(new Runnable() {
+            // The Lua VM is only ever touched on the Corona runtime thread.
+            dispatcher.send(new CoronaRuntimeTask() {
                 @Override
-                public void run() {
-                    if (fRuntime == null) return;
-                    LuaState L = fRuntime.getLuaState();
+                public void executeUsing(CoronaRuntime runtime) {
+                    if (runtime == null) return;
+                    LuaState L = runtime.getLuaState();
                     if (L == null) return;
                     if (listenerRef == CoronaLua.REFNIL) return;
 
@@ -242,6 +258,7 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 return 0;
             }
             listenerRef = CoronaLua.newRef(L, 1);
+            fDispatcher = new CoronaRuntimeTaskDispatcher(L);
 
             if (L.getTop() < 2 || !L.isTable(2)) {
                 Log.e(TAG, "ironSource.init() – arg 2 must be an options table");

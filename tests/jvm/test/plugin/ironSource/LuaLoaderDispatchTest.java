@@ -150,18 +150,44 @@ public final class LuaLoaderDispatchTest {
             }
         });
 
-        test.caseTest("runOnUiThreadFailure_isContained", new Case() {
+        test.caseTest("dispatcherSendFailure_isContained", new Case() {
             public void run() throws Exception {
                 test.boot();
                 test.initSuccess();
                 events.clear();
 
-                test.activity.failNextRunOnUiThread = new RuntimeException("ui thread gone");
+                com.ansca.corona.CoronaRuntimeTaskDispatcher.failNextSend = new RuntimeException("runtime gone");
 
                 test.rewarded().onAdLoadFailed(new LevelPlayAdError("No fill"));
 
                 test.expectEventCount(0);
                 test.expectLoggedError("Error scheduling ironSource event dispatch");
+                test.expectStackClean();
+            }
+        });
+
+        test.caseTest("uiThreadCallback_touchesLuaOnlyOnTheRuntimeThread", new Case() {
+            public void run() throws Exception {
+                // FTL fmj668 a16x: the SDK delivered a callback on the UI thread and the
+                // plugin dispatched into Lua right there, so lua_getinfo crashed (SIGSEGV).
+                test.boot();
+                test.initSuccess();
+                events.clear();
+                com.ansca.corona.CoronaLua.uiThreadLuaAccesses = 0;
+                int sentBefore = com.ansca.corona.CoronaRuntimeTaskDispatcher.sent;
+
+                test.activity.runOnUiThread(new Runnable() {
+                    public void run() {
+                        test.rewarded().onAdLoadFailed(new LevelPlayAdError("No fill"));
+                        test.interstitial().onAdLoadFailed(new LevelPlayAdError("No fill"));
+                    }
+                });
+
+                test.expectEventCount(2);
+                test.expectEquals(Integer.valueOf(0), (Object) com.ansca.corona.CoronaLua.uiThreadLuaAccesses,
+                        "Lua VM accesses on the Android UI thread");
+                test.expectEquals(Integer.valueOf(sentBefore + 2), (Object) com.ansca.corona.CoronaRuntimeTaskDispatcher.sent,
+                        "events posted through the runtime task dispatcher");
                 test.expectStackClean();
             }
         });
@@ -391,6 +417,10 @@ public final class LuaLoaderDispatchTest {
 
     private void initSuccess() {
         LevelPlay.lastInitListener.onInitSuccess(new LevelPlayConfiguration());
+    }
+
+    private com.unity3d.mediation.interstitial.LevelPlayInterstitialAdListener interstitial() {
+        return LevelPlayInterstitialAd.lastListener;
     }
 
     private com.unity3d.mediation.rewarded.LevelPlayRewardedAdListener rewarded() {
