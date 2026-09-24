@@ -324,7 +324,10 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
             L.pop(1);
 
             L.getField(2, "hasUserConsent");
-            final boolean hasConsent = L.isBoolean(-1) && L.toBoolean(-1);
+            // GDPR consent is only set when the title passes it. Where GDPR does
+            // not apply the title omits it, and LevelPlay must not be told "no".
+            final boolean consentGiven = L.isBoolean(-1);
+            final boolean hasConsent = consentGiven && L.toBoolean(-1);
             L.pop(1);
 
             L.getField(2, "coppaUnderAge");
@@ -349,7 +352,9 @@ public class LuaLoader implements JavaFunction, CoronaRuntimeListener {
                 public void run() {
                     try {
                         // Set privacy/consent flags BEFORE SDK init
-                        LevelPlay.setConsent(hasConsent);
+                        if (consentGiven) {
+                            LevelPlay.setConsent(hasConsent);
+                        }
                         LevelPlay.setMetaData("is_coppa", coppa ? "true" : "false");
                         LevelPlay.setMetaData("do_not_sell", ccpa ? "true" : "false");
 
