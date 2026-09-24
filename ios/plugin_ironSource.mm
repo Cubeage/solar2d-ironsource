@@ -224,6 +224,9 @@ static int lua_init(lua_State *L) {
     NSString *userId = GSTR("userId");
     NSString *intId  = GSTR("interstitialAdUnitId");
     NSString *rvId   = GSTR("rewardedVideoAdUnitId");
+    lua_getfield(L, 2, "hasUserConsent");
+    BOOL consentGiven = lua_isboolean(L, -1);
+    lua_pop(L, 1);
     BOOL consent     = GBOOL("hasUserConsent");
     BOOL coppa       = GBOOL("coppaUnderAge");
     BOOL ccpa        = GBOOL("ccpaDoNotSell");
@@ -240,7 +243,10 @@ static int lua_init(lua_State *L) {
     dispatch_async(dispatch_get_main_queue(), ^{
 
         // Privacy / consent
-        [LevelPlay setConsent:consent];
+        // GDPR consent only when the title passes it (omitted where GDPR does not apply).
+        if (consentGiven) {
+            [LevelPlay setConsent:consent];
+        }
         [LevelPlay setMetaDataWithKey:@"is_coppa" value:coppa ? @"true" : @"false"];
         [LevelPlay setMetaDataWithKey:@"do_not_sell" value:ccpa ? @"true" : @"false"];
         if (debug) {
