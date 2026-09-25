@@ -1,6 +1,7 @@
 name: JVM Tests
 
 on:
+  merge_group:
   push:
     branches: [ main ]
   pull_request:
@@ -26,3 +27,20 @@ jobs:
       # no Gradle, no network.
       - name: Run JVM regression tests
         run: bash tests/jvm/run.sh
+
+  # Aggregate gate: the merge queue requires only this check. Skipped jobs pass;
+  # a failed or cancelled gating job fails it.
+  ci-ok:
+    if: always()
+    needs: [jvm-tests]
+    runs-on: sylphx-linux-standard
+    timeout-minutes: 5
+    steps:
+      - name: All gating jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "gating job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in failure|cancelled) exit 1 ;; esac
+          done
