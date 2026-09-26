@@ -1,5 +1,7 @@
 # solar2d-ironsource
 
+<p align="center"><img src="https://mark.sylphx.com/api/v1/mark/hero.svg?type=aurora&color=0:A02028,50:E03840,100:1A1A1A&text=solar2d-ironsource&desc=Solar2D%20ironSource%20plugin%20%28superseded%29" alt="solar2d-ironsource" /></p>
+
 > **Superseded (2026-09-26, owner decision, SylphxAI/owner#704).** Cubeage is
 > IAP-first, with light ads or none. Where a title keeps ads, they come only from
 > AdMob (Google Mobile Ads Next-Gen SDK, no mediation layer), by default opt-in
