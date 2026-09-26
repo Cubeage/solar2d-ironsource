@@ -1,5 +1,15 @@
 # solar2d-ironsource
 
+> **Superseded (2026-09-26, owner decision, SylphxAI/owner#704).** Cubeage is
+> IAP-first, with light ads or none. Where a title keeps ads, they come only from
+> AdMob (Google Mobile Ads Next-Gen SDK, no mediation layer), by default opt-in
+> rewarded ads plus a remove-ads purchase. ironSource / Unity LevelPlay, Unity Ads,
+> Meta, Mintegral, Pangle and every other network are retired. In-flight SDK 4.2.x
+> builds may ship as they are; nothing new goes into LevelPlay, and each title
+> moves to AdMob-only or no ads at its next build. This plugin is kept only so the
+> in-flight Fun Mahjong 4.2.x build can ship and be patched; no new title uses
+> it, and it is archived once no live build needs it.
+
 Solar2D self-hosted native plugin for [IronSource (Unity LevelPlay)](https://www.is.com/) SDK **9.2.0**.
 
 Used by [Cubeage/fun-mahjong](https://github.com/Cubeage/fun-mahjong).
