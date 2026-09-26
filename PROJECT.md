@@ -1,5 +1,7 @@
 # Cubeage Solar2D IronSource Plugin
 
+> **Retired direction (2026-09-26, SylphxAI/owner#704):** ironSource/LevelPlay is retired for Cubeage. This plugin is maintained only for the in-flight Fun Mahjong 4.2.x build, then archived. See README.
+
 Cubeage Solar2D IronSource Plugin is the self-hosted native Solar2D plugin for IronSource/Unity LevelPlay. It owns the Android and iOS native plugin source, packaging workflows, and GitHub Release artifacts consumed by Solar2D applications.
 
 Lifecycle: `production`
