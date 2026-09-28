@@ -38,4 +38,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Cubeage/.github/.github/actions/self-hosted-runners@854d150d886e0a4d15846e87e57ca67c7b8c290e
+      # #13: hosted labels fail only in private repositories, so this public
+      # repository may build iOS on the free standard macOS image (owner#750).
+      - uses: Cubeage/.github/.github/actions/self-hosted-runners@237394dbee71aa1d07f00c60d5a1d69257fa3beb
